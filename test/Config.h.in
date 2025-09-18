@@ -1,0 +1,8 @@
+// Config.h.in
+
+#ifndef CONFIG_H
+#define CONFIG_H
+
+#define IMG_DATA_TEST_SOURCE_DIR "${IMG_DATA_TEST_SRC_DIR}"
+
+#endif
