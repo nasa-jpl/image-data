@@ -1,0 +1,50 @@
+name: Build and Test
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v3
+      with:
+        lfs: true
+
+    - name: Setup Git LFS
+      run: |
+        git lfs install
+        git lfs pull
+
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y cmake ninja-build
+
+    - name: Cache build directory
+      uses: actions/cache@v3
+      with:
+        path: build
+        key: ${{ runner.os }}-build-${{ hashFiles('**/*.cc', '**/*.h', 'CMakeLists.txt') }}
+        restore-keys: |
+          ${{ runner.os }}-build-
+
+    - name: Create build directory
+      run: mkdir -p build
+
+    - name: Configure CMake with Ninja
+      working-directory: build
+      run: cmake -GNinja ..
+
+    - name: Build
+      working-directory: build
+      run: ninja
+
+    - name: Run tests
+      working-directory: build
+      run: ./test/test_image_data
