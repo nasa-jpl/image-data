@@ -29,8 +29,7 @@ namespace
             const std::string my_root = std::string(IMG_DATA_TEST_SOURCE_DIR);
 
             // A non-square 1-byte PGM file with a comment line
-            pgm_file =
-                my_root + "/unit_test_data/image_data/hemisphere.pgm";
+            pgm_file = my_root + "/unit_test_data/image_data/hemisphere.pgm";
 
             // A mod file wrapping the above PGM file with a z-scale of
             // 0.5m/px and a z-offset of 10m

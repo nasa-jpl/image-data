@@ -22,6 +22,12 @@ add_executable(
     test_unit.cc
     test_unit_composite.cc
     test_unit_image_data.cc
+    test_interpolation.cc
+    test_image_data_colors.cc
+    test_file_detection.cc
+    test_z_offset_data.cc
+    test_composite_data.cc
+    test_inline_methods.cc
 )
 
 target_link_libraries(
