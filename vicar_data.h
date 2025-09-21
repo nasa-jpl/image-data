@@ -1,5 +1,5 @@
-#ifndef VicarData_H_
-#define VicarData_H_
+#ifndef RSVP_IMAGE_DATA_VICAR_DATA_H
+#define RSVP_IMAGE_DATA_VICAR_DATA_H
 
 #include "image_data.h"
 

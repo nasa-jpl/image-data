@@ -1,5 +1,5 @@
-#ifndef CSVData_H_
-#define CSVData_H_
+#ifndef RSVP_IMAGE_DATA_CSV_DATA_H
+#define RSVP_IMAGE_DATA_CSV_DATA_H
 
 #include "image_data.h"
 

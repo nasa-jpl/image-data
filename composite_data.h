@@ -1,5 +1,5 @@
-#ifndef CompositeData_H_
-#define CompositeData_H_
+#ifndef RSVP_IMAGE_DATA_COMPOSITE_DATA_H
+#define RSVP_IMAGE_DATA_COMPOSITE_DATA_H
 
 #include "image_data.h"
 

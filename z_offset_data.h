@@ -1,5 +1,5 @@
-#ifndef ZOffsetData_H_
-#define ZOffsetData_H_
+#ifndef RSVP_IMAGE_DATA_Z_OFFSET_DATA_H
+#define RSVP_IMAGE_DATA_Z_OFFSET_DATA_H
 
 #include "image_data.h"
 

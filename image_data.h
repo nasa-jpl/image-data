@@ -1,5 +1,5 @@
-#ifndef ImageData_H_
-#define ImageData_H_
+#ifndef RSVP_IMAGE_DATA_IMAGE_DATA_H
+#define RSVP_IMAGE_DATA_IMAGE_DATA_H
 
 #include <list>
 #include <memory>
