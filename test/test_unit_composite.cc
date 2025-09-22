@@ -18,7 +18,8 @@ namespace
     protected:
         CompositeTest()
         {
-            const std::string mod_root = std::string(IMG_DATA_TEST_SOURCE_DIR) + "/terrain";
+            const std::string mod_root =
+                std::string(IMG_DATA_TEST_SOURCE_DIR) + "/terrain";
 
             // Make the AlphaBlendingCompositeData with left first and right
             // second.
@@ -389,5 +390,3 @@ namespace
         }
     }
 }
-
-

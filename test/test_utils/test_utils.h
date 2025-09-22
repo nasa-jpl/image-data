@@ -1,5 +1,5 @@
-#ifndef TEST_UTILS_H
-#define TEST_UTILS_H
+#ifndef RSVP_IMAGE_DATA_TEST_UTILS_H
+#define RSVP_IMAGE_DATA_TEST_UTILS_H
 
 #include <string>
 

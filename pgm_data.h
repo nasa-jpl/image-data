@@ -1,5 +1,5 @@
-#ifndef PGMData_H_
-#define PGMData_H_
+#ifndef RSVP_IMAGE_DATA_PGM_DATA_H
+#define RSVP_IMAGE_DATA_PGM_DATA_H
 
 #include "image_data.h"
 

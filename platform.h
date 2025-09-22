@@ -1,8 +1,9 @@
-#ifndef IMAGE_DATA_PLATFORM_H
-#define IMAGE_DATA_PLATFORM_H
+#ifndef RSVP_IMAGE_DATA_PLATFORM_H
+#define RSVP_IMAGE_DATA_PLATFORM_H
 
 #include <stdexcept>
 #include <string>
+#include <cstdint>
 
 
 namespace rsvp
