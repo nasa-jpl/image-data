@@ -6,8 +6,8 @@
 
 #include "Config.h"
 
-// Simple image implementation for testing ZOffsetData
-class SimpleTestImage : public rsvp::ImageData
+// Image implementation for testing ZOffsetData
+class ZOffsetTestImage : public rsvp::ImageData
 {
 private:
     double data[9] = {1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0};
@@ -17,10 +17,10 @@ private:
     int alpha_value = -1;
 
 public:
-    SimpleTestImage() = default;
+    ZOffsetTestImage() = default;
 
     // Create multi-band image
-    explicit SimpleTestImage(int bands) :
+    explicit ZOffsetTestImage(int bands) :
         band_count(bands)
     {
     }
@@ -57,6 +57,13 @@ public:
         // Simple implementation for testing - just round to nearest
         int int_x = static_cast<int>(x + 0.5);
         int int_y = static_cast<int>(y + 0.5);
+        
+        // Check if coordinates are out of bounds before rounding
+        if (x < 0 || x >= width || y < 0 || y >= height || band < 0 || band >= band_count)
+        {
+            return false;
+        }
+        
         return get_pixel_double(value, int_x, int_y, band);
     }
 
@@ -115,7 +122,7 @@ TEST(z_offset_data, constructor)
     EXPECT_EQ(nullData.get_height(), 0);
 
     // Test with normal image
-    auto baseImage = std::make_shared<SimpleTestImage>();
+    auto baseImage = std::make_shared<ZOffsetTestImage>();
     rsvp::ZOffsetData offsetData(baseImage);
 
     EXPECT_EQ(offsetData.get_bands(), 1);
@@ -123,17 +130,16 @@ TEST(z_offset_data, constructor)
     EXPECT_EQ(offsetData.get_height(), 3);
 
     // Test with multi-band image
-    // The SimpleTestImage implementation only supports one band regardless of
-    // constructor parameter so we need to check that ZOffsetData properly
-    // forwards the bands from the underlying image
-    auto multiBandImage = std::make_shared<SimpleTestImage>(1);
+    // Check that ZOffsetData properly forwards the band count
+    // from the underlying image
+    auto multiBandImage = std::make_shared<ZOffsetTestImage>(1);
     rsvp::ZOffsetData multiBandOffsetData(multiBandImage);
     EXPECT_EQ(multiBandOffsetData.get_bands(), 1);
 }
 
 TEST(z_offset_data, get_pixel_double)
 {
-    auto baseImage = std::make_shared<SimpleTestImage>();
+    auto baseImage = std::make_shared<ZOffsetTestImage>();
     rsvp::ZOffsetData offsetData(baseImage);
 
     double value;
@@ -167,7 +173,7 @@ TEST(z_offset_data, get_pixel_double)
 
 TEST(z_offset_data, get_interpolated_pixel_double)
 {
-    auto baseImage = std::make_shared<SimpleTestImage>();
+    auto baseImage = std::make_shared<ZOffsetTestImage>();
     rsvp::ZOffsetData offsetData(baseImage);
 
     double value;
@@ -192,7 +198,7 @@ TEST(z_offset_data, get_interpolated_pixel_double)
 
 TEST(z_offset_data, get_pixel_int)
 {
-    auto baseImage = std::make_shared<SimpleTestImage>();
+    auto baseImage = std::make_shared<ZOffsetTestImage>();
     rsvp::ZOffsetData offsetData(baseImage);
 
     int value;
@@ -219,7 +225,7 @@ TEST(z_offset_data, get_pixel_int)
 
 TEST(z_offset_data, get_interpolated_pixel_int)
 {
-    auto baseImage = std::make_shared<SimpleTestImage>();
+    auto baseImage = std::make_shared<ZOffsetTestImage>();
     rsvp::ZOffsetData offsetData(baseImage);
 
     int value;
@@ -246,7 +252,7 @@ TEST(z_offset_data, get_interpolated_pixel_int)
 
 TEST(z_offset_data, set_offset_and_scale)
 {
-    auto baseImage = std::make_shared<SimpleTestImage>(1);
+    auto baseImage = std::make_shared<ZOffsetTestImage>(1);
     rsvp::ZOffsetData offsetData(baseImage);
 
     double value;
@@ -273,7 +279,7 @@ TEST(z_offset_data, set_offset_and_scale)
 
 TEST(z_offset_data, alpha_band)
 {
-    auto baseImage = std::make_shared<SimpleTestImage>();
+    auto baseImage = std::make_shared<ZOffsetTestImage>();
     rsvp::ZOffsetData offsetData(baseImage);
 
     // Check default alpha band

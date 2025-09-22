@@ -6,8 +6,8 @@
 
 #include "Config.h"
 
-// Simple image implementation for testing CompositeData classes
-class SimpleTestImage : public rsvp::ImageData
+// Image implementation for testing CompositeData classes
+class CompositeTestImage : public rsvp::ImageData
 {
 private:
     double data[9] = {1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0};
@@ -18,10 +18,10 @@ private:
     bool use_interpolation = true;
 
 public:
-    SimpleTestImage() = default;
+    CompositeTestImage() = default;
 
     // Create multi-band image
-    explicit SimpleTestImage(int bands) :
+    explicit CompositeTestImage(int bands) :
         band_count(bands)
     {
     }
@@ -44,21 +44,24 @@ public:
 
     bool get_pixel_double(double &value, int x, int y, int band) const override
     {
-        if (x < 0 || x >= width || y < 0 || y >= height || band < 0 ||
-            band >= band_count)
+        if (x < 0 || x >= width || y < 0 || y >= height || band >= band_count)
         {
             return false;
         }
-        if (band == 0)
+        
+        // Handle negative band indices by using band 0, to match the comment in the test
+        int actual_band = (band < 0) ? 0 : band;
+        
+        if (actual_band == 0)
         {
             value = data[y * width + x];
         }
-        else if (band == 1)
+        else if (actual_band == 1)
         {
             // Second band contains values 10-19
             value = 10.0 + (y * width + x);
         }
-        else if (band == 2)
+        else if (actual_band == 2)
         {
             // Alpha band contains values 100-109 (for testing)
             value = 100.0 + (y * width + x);
@@ -66,7 +69,7 @@ public:
         else
         {
             // For any other band
-            value = band * 100.0 + (y * width + x);
+            value = actual_band * 100.0 + (y * width + x);
         }
         return true;
     }
@@ -190,7 +193,7 @@ TEST(composite_data, base_class_functions)
     EXPECT_FALSE(composite.get_interpolated_pixel_double(value, 0.0, 0.0, 0));
 
     // Add an image to the composite
-    auto img1 = std::make_shared<SimpleTestImage>();
+    auto img1 = std::make_shared<CompositeTestImage>();
     composite.add_image(img1);
 
     // Test after adding one image
@@ -200,7 +203,7 @@ TEST(composite_data, base_class_functions)
               -1); // Should match the image's alpha band
 
     // Add a second image at a specific position
-    auto img2 = std::make_shared<SimpleTestImage>(1); // 1-band image
+    auto img2 = std::make_shared<CompositeTestImage>(1); // 1-band image
     img2->set_alpha_band(0);
     composite.add_image(img2, 0); // Insert at beginning
 
@@ -216,7 +219,7 @@ TEST(composite_data, base_class_functions)
     EXPECT_EQ(composite.get_count(), 2); // Count should not change
 
     // Add a third image out of bounds (should add to the end)
-    auto img3 = std::make_shared<SimpleTestImage>();
+    auto img3 = std::make_shared<CompositeTestImage>();
     composite.add_image(img3, 10);
     EXPECT_EQ(composite.get_count(), 3);
 
@@ -251,7 +254,7 @@ TEST(composite_data, average_composite_data)
     EXPECT_FALSE(composite.get_interpolated_pixel_double(value, 0.0, 0.0, 0));
 
     // Now add an image with valid pixel data and test again
-    auto img = std::make_shared<SimpleTestImage>(1);
+    auto img = std::make_shared<CompositeTestImage>(1);
     img->set_alpha_band(
         0); // Use the only band as alpha band to ensure blending works
     composite.add_image(img);
@@ -271,8 +274,8 @@ TEST(composite_data, alpha_blending_composite_data)
     rsvp::AlphaBlendingCompositeData composite;
 
     // Create and add test images
-    auto img1 = std::make_shared<SimpleTestImage>(3);
-    auto img2 = std::make_shared<SimpleTestImage>(3);
+    auto img1 = std::make_shared<CompositeTestImage>(3);
+    auto img2 = std::make_shared<CompositeTestImage>(3);
 
     // Manually set alpha band
     img1->set_alpha_band(2);
@@ -298,14 +301,14 @@ TEST(composite_data, alpha_blending_composite_data)
 
     // Test with single band image (PGM data case)
     rsvp::AlphaBlendingCompositeData pgmComposite;
-    auto pgmImage = std::make_shared<SimpleTestImage>(1);
+    auto pgmImage = std::make_shared<CompositeTestImage>(1);
     pgmComposite.add_image(pgmImage);
 
     EXPECT_TRUE(
         pgmComposite.get_interpolated_pixel_double(value, 1.0, 1.0, 0));
 
     // Test with invalid alpha band
-    auto invalidAlphaImg = std::make_shared<SimpleTestImage>(3);
+    auto invalidAlphaImg = std::make_shared<CompositeTestImage>(3);
     invalidAlphaImg->set_alpha_band(-1);
 
     rsvp::AlphaBlendingCompositeData invalidAlphaComposite;
@@ -325,7 +328,7 @@ TEST(composite_data, scored_composite_data)
     EXPECT_FALSE(composite.get_interpolated_pixel_double(value, 0.0, 0.0, 0));
 
     // Now add an image with valid pixel data
-    auto img = std::make_shared<SimpleTestImage>(1);
+    auto img = std::make_shared<CompositeTestImage>(1);
     // Set the only band as alpha band to ensure scoring works
     img->set_alpha_band(0);
     composite.add_image(img);

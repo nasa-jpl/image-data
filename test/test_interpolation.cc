@@ -7,7 +7,7 @@
 
 #include "Config.h"
 
-class SimpleTestImage : public rsvp::ImageData
+class InterpolationTestImage : public rsvp::ImageData
 {
 private:
     double data[9] = {1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0};
@@ -15,7 +15,7 @@ private:
     int height = 3;
 
 public:
-    SimpleTestImage() = default;
+    InterpolationTestImage() = default;
 
     int get_bands() const override
     {
@@ -45,7 +45,7 @@ public:
 
 TEST(image_data_interpolation, interpolation_enabled_disabled)
 {
-    SimpleTestImage img;
+    InterpolationTestImage img;
 
     // Test interpolation is enabled by default
     EXPECT_EQ(img.get_interpolating(), true);
@@ -61,7 +61,7 @@ TEST(image_data_interpolation, interpolation_enabled_disabled)
 
 TEST(image_data_interpolation, get_interpolated_pixel_double_disabled)
 {
-    SimpleTestImage img;
+    InterpolationTestImage img;
     img.set_interpolating(false);
 
     double value;
@@ -79,7 +79,7 @@ TEST(image_data_interpolation, get_interpolated_pixel_double_disabled)
 
 TEST(image_data_interpolation, get_interpolated_pixel_double_enabled)
 {
-    SimpleTestImage img;
+    InterpolationTestImage img;
     double value;
 
     // When interpolation is enabled, it should interpolate between pixels
@@ -97,7 +97,7 @@ TEST(image_data_interpolation, get_interpolated_pixel_double_enabled)
 
 TEST(image_data_interpolation, get_interpolated_pixel_double_out_of_bounds)
 {
-    SimpleTestImage img;
+    InterpolationTestImage img;
     double value;
 
     // Test out of bounds
@@ -107,7 +107,7 @@ TEST(image_data_interpolation, get_interpolated_pixel_double_out_of_bounds)
 
 TEST(image_data_interpolation, get_pixel_int)
 {
-    SimpleTestImage img;
+    InterpolationTestImage img;
     int value;
 
     // Test normal case
@@ -130,7 +130,7 @@ TEST(image_data_interpolation, get_pixel_int)
 
 TEST(image_data_interpolation, get_interpolated_pixel_int)
 {
-    SimpleTestImage img;
+    InterpolationTestImage img;
     int value;
 
     // Test normal case with rounding
@@ -146,7 +146,7 @@ TEST(image_data_interpolation, get_interpolated_pixel_int)
 
 TEST(image_data_interpolation, alpha_band)
 {
-    SimpleTestImage img;
+    InterpolationTestImage img;
 
     // Test default alpha band
     EXPECT_EQ(img.get_alpha_band(), -1);
