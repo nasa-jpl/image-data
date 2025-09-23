@@ -18,8 +18,8 @@ The example below parses
 (and assumes it has been downloaded to the current directory already):
 
 ```cpp
-#include "image_data.h"
-#include "vicar_data.h"
+#include <image_data.h>
+#include <vicar_data.h>
 
 #include <iostream>
 #include <memory>
@@ -30,7 +30,7 @@ int main()
     // Read a VICAR file using the static factory method.
     std::shared_ptr<rsvp::ImageData> image = rsvp::ImageData::read(
         "NLF_1497_0799838646_034EDR_N0730000NCAM00709_01_095J01.IMG");
-    if (!image)
+    if (not image)
     {
         std::cerr << "Failed to read image file" << std::endl;
         return 1;
@@ -52,7 +52,7 @@ int main()
     const auto vicar_image = std::dynamic_pointer_cast<rsvp::VicarData>(image);
     if (vicar_image)
     {
-        // Access VICAR-specific metadata
+        // Access VICAR-specific metadata.
         std::cout << "VICAR data organization: "
                   << (vicar_image->get_org() == rsvp::VicarData::BSQ
                           ? "Band Sequential"
@@ -61,7 +61,7 @@ int main()
                                 : "Band Interleaved by Pixel")
                   << std::endl;
 
-        // Get label property if available
+        // Get label property if available.
         std::string property_value;
         if (vicar_image->get_label_property(
                 "IDENTIFICATION", "MISSION_NAME", property_value))
@@ -69,8 +69,6 @@ int main()
             std::cout << "Mission: " << property_value << std::endl;
         }
     }
-
-    return 0;
 }
 ```
 
