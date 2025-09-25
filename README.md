@@ -11,6 +11,10 @@ The library is small, portable, and optimized for fast decoding, providing a
 modern and maintainable solution for working with mission-critical image data
 using the C++17 standard.
 
+This library is developed by the
+[JPL RSVP (Robot Sequencing and Visualization Platform)](https://robotics.jpl.nasa.gov/what-we-do/flight-projects/mars-2020-rover/rsvp-mars-2020/)
+team.
+
 ## Usage
 
 The example below parses
