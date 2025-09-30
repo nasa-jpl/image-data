@@ -37,13 +37,19 @@ jobs:
     - name: Create build directory
       run: mkdir -p build
 
+    # Enable problem matcher for compiler warnings
+    - name: Enable GCC Problem Matcher
+      run: echo "::add-matcher::.github/problem-matchers/gcc.json"
+
     - name: Configure CMake with Ninja
       working-directory: build
       run: cmake -GNinja ..
 
+    # Capture warnings by treating them as annotations
     - name: Build
       working-directory: build
-      run: ninja
+      # Force warnings to be shown in build output for problem matcher
+      run: ninja -v
 
     - name: Run tests
       working-directory: build
