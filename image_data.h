@@ -1,6 +1,7 @@
 #ifndef RSVP_IMAGE_DATA_IMAGE_DATA_H
 #define RSVP_IMAGE_DATA_IMAGE_DATA_H
 
+#include <cstdint>
 #include <list>
 #include <memory>
 #include <string>
