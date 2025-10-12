@@ -4,7 +4,6 @@
 
 #include <algorithm>
 #include <array>
-#include <cctype>
 #include <cstdint>
 #include <cstring>
 #include <fstream>
@@ -12,44 +11,12 @@
 #include <memory>
 #include <regex>
 #include <sstream>
-#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <unistd.h>
 #include <utility>
 
 #define PAGE_SIZE sysconf(_SC_PAGESIZE)
-
-// Image tile data structure to help speed up "get_interpolated_pixel_int"
-class VicarTile
-{
-private:
-    double *tile_data;
-public:
-    VicarTile()
-    {
-        // Allocate a tile aligned to a 4KB byte width
-        if (posix_memalign((void **)(&this->tile_data), 4096, 22 * 22) != 0)
-        {
-            throw std::runtime_error(strerror(errno));
-        }
-    }
-
-    ~VicarTile()
-    {
-        free(tile_data);
-    }
-
-    inline double get(int y, int x)
-    {
-        return tile_data[((y % 22) * 22) + (x % 22)];
-    }
-
-    inline void set(double &val, int y, int x)
-    {
-        tile_data[((y % 22) * 22) + (x % 22)] = val;
-    }
-};
 
 static bool extract_vector(const std::string &array_str, double values[3])
 {
@@ -71,12 +38,10 @@ namespace rsvp
         lblsize(0),
         NBB(0),
         NLB(0),
-        pixel_data(nullptr),
         int_opposite_endian(false),
         real_opposite_endian(false)
     {
     }
-
 
     VicarData::VicarData(int samples,
                          int lines,
@@ -88,8 +53,29 @@ namespace rsvp
         this->NL = lines;
         this->NB = bands;
         this->format = data_format;
-        this->pixel_data = std::unique_ptr<double[]>(
-            new double[static_cast<unsigned long>(NB * NL * NS)]);
+
+        // Create enough tile elements to store needed samples
+        int num_tiles = bands * ((lines + (22 - 1)) / 22) * ((samples + (22 - 1)) / 22);
+        for (int i = 0; i < num_tiles; i++) {
+            // We don't use shared_ptr here as it would double memory usage
+            // Align to 4KB, which is the standard page size on X86
+            // With 8-byte doubles, this gives us 512 entries per tile, a 22-by-22 square
+            double *tile_data = static_cast<double *>(std::aligned_alloc(4096, 4096));
+            if (tile_data == nullptr)
+            {
+                throw std::runtime_error(strerror(errno));
+            }
+            this->pixel_data.push_back(tile_data);
+        }
+    }
+
+    VicarData::~VicarData()
+    {
+        // Free up allocated space in pixel_data
+        for (double *tile : this->pixel_data)
+        {
+            free(tile);
+        }
     }
 
     void VicarData::set_labels(std::string _comments)
@@ -369,10 +355,13 @@ namespace rsvp
             return false;
         }
 
-        // pixel_data is always organized as BSQ
-        // (no interlacing)
-        value = pixel_data[static_cast<size_t>(band * (NL * NS) + line * NS +
-                                               sample)];
+        // pixel_data is always organized as BSQ (no interlacing)
+        // Each tile is a 22-by-22 pixel image
+        int tile_rows = (this->NL + (22 - 1)) / 22, tile_cols = (this->NS + (22 - 1)) / 22;
+        double *tile = this->pixel_data.at((band * (tile_rows * tile_cols)) + ((line / 22) * tile_cols) + (sample / 22));
+        // Grab the value from the tile that contains it
+        value = *(tile + (((line % 22) * 22) + (sample % 22)));
+
         return true;
     }
 
@@ -391,8 +380,12 @@ namespace rsvp
             return false;
         }
 
-        pixel_data[static_cast<size_t>(band * (NL * NS) + line * NS +
-                                       sample)] = value;
+        // Each tile is a 22-by-22 pixel image, in BSQ order
+        int tile_rows = (this->NL + (22 - 1)) / 22, tile_cols = (this->NS + (22 - 1)) / 22;
+        double *tile = this->pixel_data.at((band * (tile_rows * tile_cols)) + ((line / 22) * tile_cols) + (sample / 22));
+        // Grab the value from the tile that contains it
+        *(tile + (((line % 22) * 22) + (sample % 22))) = value;
+
         return true;
     }
 
@@ -593,9 +586,20 @@ namespace rsvp
         //      n3 = line
 
         int fmt_size = result->get_pixel_byte_count();
-        result->pixel_data =
-            std::unique_ptr<double[]>(new double[static_cast<size_t>(
-                result->NB * result->NL * result->NS)]);
+
+        // Create enough tile elements to store needed samples
+        int num_tiles = result->NB * ((result->NL + (22 - 1)) / 22) * ((result->NS + (22 - 1)) / 22);
+        for (int i = 0; i < num_tiles; i++) {
+            // We don't use shared_ptr here as it would double memory usage
+            // Align to 4KB, which is the standard page size on X86
+            // With 8-byte doubles, this gives us 512 entries per tile, a 22-by-22 square
+            double *tile_data = static_cast<double *>(std::aligned_alloc(4096, 4096));
+            if (tile_data == nullptr)
+            {
+                throw std::runtime_error(strerror(errno));
+            }
+            result->pixel_data.push_back(tile_data);
+        }
 
         int raw_data_is_int =
             (result->format == BYTE || result->format == HALF ||
@@ -674,25 +678,19 @@ namespace rsvp
                         // n3 = band
                         // n2 = line
                         // n1 = sample
-                        result->pixel_data[static_cast<size_t>(
-                            n3 * (result->NL * result->NS) + n2 * result->NS +
-                            n1)] = value;
+                        result->set_pixel_double(value, n1, n2, n3);
                         break;
                     case BIL:
                         // n2 = band
                         // n3 = line
                         // n1 = sample
-                        result->pixel_data[static_cast<size_t>(
-                            n2 * (result->NL * result->NS) + n3 * result->NS +
-                            n1)] = value;
+                        result->set_pixel_double(value, n1, n3, n2);
                         break;
                     case BIP:
                         // n1 = band
                         // n3 = line
                         // n2 = sample
-                        result->pixel_data[static_cast<size_t>(
-                            n1 * (result->NL * result->NS) + n3 * result->NS +
-                            n2)] = value;
+                        result->set_pixel_double(value, n2, n3, n1);
                         break;
                     }
                 }
