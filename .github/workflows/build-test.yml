@@ -8,7 +8,11 @@ on:
 
 jobs:
   build-and-test:
-    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+      fail-fast: false
+    runs-on: ${{ matrix.os }}
 
     steps:
     - name: Checkout repository
@@ -21,10 +25,16 @@ jobs:
         git lfs install
         git lfs pull
 
-    - name: Install dependencies
+    - name: Install dependencies (Ubuntu)
+      if: runner.os == 'Linux'
       run: |
         sudo apt-get update
         sudo apt-get install -y cmake ninja-build
+
+    - name: Install dependencies (macOS)
+      if: runner.os == 'macOS'
+      run: |
+        brew install cmake ninja
 
     - name: Cache build directory
       uses: actions/cache@v3
@@ -38,7 +48,7 @@ jobs:
       run: mkdir -p build
 
     # Enable problem matcher for compiler warnings
-    - name: Enable GCC Problem Matcher
+    - name: Enable Compiler Warning Problem Matcher
       run: echo "::add-matcher::.github/problem-matchers/gcc.json"
 
     - name: Configure CMake with Ninja
