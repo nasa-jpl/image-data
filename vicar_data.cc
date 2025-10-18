@@ -336,7 +336,7 @@ namespace rsvp
         int_opposite_endian = host_little_endian != int_little_endian;
     }
 
-    bool VicarData::get_pixel_double(double &value,
+    inline bool VicarData::get_pixel_double(double &value,
                                      const int sample,
                                      const int line,
                                      const int band) const
@@ -406,7 +406,7 @@ namespace rsvp
         // edge case where our x-value is on the edge of a tile, we'd have to access 2 pages
         // inefficiently. In those cases, we can just access up-to-down first to minimize the
         // performance impact.
-        if (int_x % TILE_DIM != TILE_DIM - 1 || int_y % TILE_DIM == TILE_DIM - 1)
+        if (int_x % TILE_DIM != TILE_DIM - 1)
         {
             // Get in upper left, upper right, then lower left and lower right
             has_err &= get_pixel_double(ul, int_x, int_y, band);

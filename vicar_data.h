@@ -338,7 +338,7 @@ namespace rsvp
          *
          * @return A boolean indicating whether the pixel was successfully gotten
          */
-        bool get_pixel_double(double &value,
+        inline bool get_pixel_double(double &value,
                               int sample,
                               int line,
                               int band) const override;
