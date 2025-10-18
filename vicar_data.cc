@@ -406,20 +406,20 @@ namespace rsvp
         // edge case where our x-value is on the edge of a tile, we'd have to access 2 pages
         // inefficiently. In those cases, we can just access up-to-down first to minimize the
         // performance impact.
-        if (int_x % TILE_DIM == TILE_DIM - 1 && int_y % TILE_DIM != TILE_DIM - 1)
+        if (int_x % TILE_DIM != TILE_DIM - 1 || int_y % TILE_DIM == TILE_DIM - 1)
+        {
+            // Get in upper left, upper right, then lower left and lower right
+            has_err &= get_pixel_double(ul, int_x, int_y, band);
+            has_err &= get_pixel_double(ur, int_x + 1, int_y, band);
+            has_err &= get_pixel_double(ll, int_x, int_y + 1, band);
+            has_err &= get_pixel_double(lr, int_x + 1, int_y + 1, band);
+        }
+        else
         {
             // Get upper and lower left first, then right if we're on the vertical edge of a tile
             has_err &= get_pixel_double(ul, int_x, int_y, band);
             has_err &= get_pixel_double(ll, int_x, int_y + 1, band);
             has_err &= get_pixel_double(ur, int_x + 1, int_y, band);
-            has_err &= get_pixel_double(lr, int_x + 1, int_y + 1, band);
-        }
-        else
-        { 
-            // Otherwise get in upper left, upper right, then lower left and lower right
-            has_err &= get_pixel_double(ul, int_x, int_y, band);
-            has_err &= get_pixel_double(ur, int_x + 1, int_y, band);
-            has_err &= get_pixel_double(ll, int_x, int_y + 1, band);
             has_err &= get_pixel_double(lr, int_x + 1, int_y + 1, band);
         }
 
