@@ -343,6 +343,26 @@ namespace rsvp
                               int line,
                               int band) const override;
 
+        /**
+         * @brief Get the interpolated pixel band value as a double.
+         *
+         * Subclasses may implement interpolation in different ways -
+         * nearest-neighbor, last data wins, bilinear interpolation, etc.
+         *
+         * @param[out] value  An interpolated computation of the data at * (x,
+         * y, band) in double format.
+         * @param[in] x       The "x-like" coordinate of the pixel of interest
+         * @param[in] y       The "y-like" coordinate of the pixel of interest
+         * @param[in] band    The band of the pixel to access
+         *
+         * @return true if (x, y, band) was within bounds and the result is
+         * valid
+         */
+        bool get_interpolated_pixel_double(double &value,
+                                           double x,
+                                           double y,
+                                           int band) const override;
+
         /*
          * @brief Set a pixel of the image from a double value
          *
