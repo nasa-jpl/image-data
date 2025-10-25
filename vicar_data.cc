@@ -18,8 +18,8 @@
 #include <unistd.h>
 #include <utility>
 
-#define TILE_SIZE 2048
-#define TILE_DIM  16
+#define TILE_SIZE 32
+#define TILE_DIM  2
 
 static bool extract_vector(const std::string &array_str, double values[3])
 {
@@ -62,7 +62,7 @@ namespace rsvp
 
         // Align to 4KB, which is the standard page size on X86
         // With 8-byte doubles, this gives us 512 entries per tile, a TILE_DIM-by-TILE_DIM square
-        this->pixel_data = static_cast<double *>(std::aligned_alloc(4096, TILE_SIZE * num_tiles));
+        this->pixel_data = static_cast<double *>(std::aligned_alloc(32, TILE_SIZE * num_tiles));
     }
 
     VicarData::~VicarData()
@@ -668,7 +668,7 @@ namespace rsvp
         // We don't use shared_ptr here as it would double memory usage
         // Align to 4KB, which is the standard page size on X86
         // With 8-byte doubles, this gives us 512 entries per tile, a TILE_DIM-by-TILE_DIM square            
-        result->pixel_data = static_cast<double *>(std::aligned_alloc(4096, TILE_SIZE * num_tiles));
+        result->pixel_data = static_cast<double *>(std::aligned_alloc(32, TILE_SIZE * num_tiles));
 
         int raw_data_is_int =
             (result->format == BYTE || result->format == HALF ||
