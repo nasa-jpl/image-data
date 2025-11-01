@@ -17,8 +17,8 @@
 #include <unistd.h>
 #include <utility>
 
-#define TILE_SIZE 4096
-#define TILE_DIM  22
+#define TILE_SIZE 12288
+#define TILE_DIM  39
 
 static bool extract_vector(const std::string &array_str, double values[3])
 {
@@ -661,9 +661,7 @@ namespace rsvp
                             std::to_string(result->format));
                     }
 
-                    size_t tile_rows = (result->NL + (TILE_DIM - 1)) / TILE_DIM, tile_cols = (result->NS + (TILE_DIM - 1)) / TILE_DIM;
-                    size_t target_tile = 0;
-                    double *tile = nullptr;
+                    int tile_rows = (result->NL + (TILE_DIM - 1)) / TILE_DIM, tile_cols = (result->NS + (TILE_DIM - 1)) / TILE_DIM;
 
                     switch (result->org)
                     {
@@ -673,25 +671,19 @@ namespace rsvp
                         // n3 = band
                         // n2 = line
                         // n1 = sample
-                        target_tile = (n3 * (tile_rows * tile_cols)) + ((n2 / TILE_DIM) * tile_cols) + (n1 / TILE_DIM);
-                        tile = result->pixel_data + ((TILE_SIZE / sizeof(double)) * target_tile);
-                        *(tile + (((n2 % TILE_DIM) * TILE_DIM) + (n1 % TILE_DIM))) = value;
+                        result->set_pixel_double(value, n1, n2, n3);
                         break;
                     case BIL:
                         // n2 = band
                         // n3 = line
                         // n1 = sample
-                        target_tile = (n2 * (tile_rows * tile_cols)) + ((n3 / TILE_DIM) * tile_cols) + (n1 / TILE_DIM);
-                        tile = result->pixel_data + ((TILE_SIZE / sizeof(double)) * target_tile);
-                        *(tile + (((n3 % TILE_DIM) * TILE_DIM) + (n1 % TILE_DIM))) = value;
+                        result->set_pixel_double(value, n1, n3, n2);
                         break;
                     case BIP:
                         // n1 = band
                         // n3 = line
                         // n2 = sample
-                        target_tile = (n1 * (tile_rows * tile_cols)) + ((n3 / TILE_DIM) * tile_cols) + (n2 / TILE_DIM);
-                        tile = result->pixel_data + ((TILE_SIZE / sizeof(double)) * target_tile);
-                        *(tile + (((n3 % TILE_DIM) * TILE_DIM) + (n2 % TILE_DIM))) = value;
+                        result->set_pixel_double(value, n2, n3, n1);
                         break;
                     }
                 }
