@@ -336,10 +336,10 @@ namespace rsvp
         int_opposite_endian = host_little_endian != int_little_endian;
     }
 
-    bool VicarData::get_pixel_double(double &value,
-                                     const int sample,
-                                     const int line,
-                                     const int band) const
+    inline bool VicarData::get_pixel_double(double &value,
+                                            const int sample,
+                                            const int line,
+                                            const int band) const
     {
         if (line < 0 || sample < 0 || band < 0)
         {
