@@ -16,6 +16,8 @@
 #include <unistd.h>
 #include <utility>
 
+#define PAGE_SIZE sysconf(_SC_PAGESIZE)
+
 static bool extract_vector(const std::string &array_str, double values[3])
 {
     return sscanf(array_str.c_str(),
