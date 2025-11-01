@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <cmath>
 #include <cstdint>
 #include <cstring>
 #include <fstream>
@@ -339,6 +340,83 @@ namespace rsvp
         // (no interlacing)
         value = pixel_data[static_cast<size_t>(band * (NL * NS) + line * NS +
                                                sample)];
+        return true;
+    }
+
+    bool VicarData::get_interpolated_pixel_double(double &value,
+                                                  const double x,
+                                                  const double y,
+                                                  const int band) const
+    {
+        // If we've been asked not to interpolate data, snap to the nearest
+        // whole pixel and return that data
+        if (!get_interpolating())
+        {
+            int x_uninterp =
+                x > 0 ? static_cast<int>(x + 0.5) : static_cast<int>(x - 0.5);
+            int y_uninterp =
+                y > 0 ? static_cast<int>(y + 0.5) : static_cast<int>(y - 0.5);
+            return get_pixel_double(value, x_uninterp, y_uninterp, band);
+        }
+
+        int int_x = static_cast<int>(x);
+        int int_y = static_cast<int>(y);
+
+        if (int_x < 0.0)
+        {
+            // We sample at (int_x) and (int_x+1), so make sure that
+            // those two span the input
+            int_x--;
+        }
+
+        if (int_y < 0.0)
+        {
+            // We sample at (int_y) and (int_y+1), so make sure that
+            // those two span the input
+            int_y--;
+        }
+
+        double frac_x = fabs(x - int_x);
+        double frac_y = fabs(y - int_y);
+
+        // Prefetch the lower left and right elements
+        __builtin_prefetch((void *)(&pixel_data + (band * (NL * NS) + (int_y + 1) * NS + int_x)), 0, 0);
+
+        // Upper left (x, y)
+        double ul = 0.0;
+        if (!get_pixel_double(ul, int_x, int_y, band))
+        {
+            return false;
+        }
+        double ul_weight = (1.0 - frac_x) * (1.0 - frac_y);
+
+        // Upper right (x+1, y)
+        double ur = 0.0;
+        if (!get_pixel_double(ur, int_x + 1, int_y, band))
+        {
+            return false;
+        }
+        double ur_weight = frac_x * (1.0 - frac_y);
+
+        // Lower left (x, y+1)
+        double ll = 0.0;
+        if (!get_pixel_double(ll, int_x, int_y + 1, band))
+        {
+            return false;
+        }
+        double ll_weight = (1.0 - frac_x) * frac_y;
+
+        // Lower right (x+1, y+1)
+        double lr = 0.0;
+        if (!get_pixel_double(lr, int_x + 1, int_y + 1, band))
+        {
+            return false;
+        }
+        double lr_weight = frac_x * frac_y;
+
+        // Perform bilinear interpolation
+        value =
+            ul * ul_weight + ur * ur_weight + ll * ll_weight + lr * lr_weight;
         return true;
     }
 
