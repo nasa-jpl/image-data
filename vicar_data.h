@@ -5,6 +5,7 @@
 
 #include <memory>
 #include <unordered_map>
+#include <vector>
 
 
 namespace rsvp
@@ -261,9 +262,8 @@ namespace rsvp
         int NBB; // Number of bytes of binary prefix before each record
         int NLB; // Number of lines of binary header at the top of the file
 
-        double * // We don't use shared_ptr here as it would double memory usage
-            pixel_data = nullptr;
-                        // Pixel data that has been re-shuffled and
+        std::vector<double *>
+            pixel_data; // Pixel data that has been re-shuffled and
                         // casted to double precision with BSQ
                         // organization. This is usually the most
                         // efficient format as bands are usually

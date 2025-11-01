@@ -5,7 +5,6 @@
 #include <algorithm>
 #include <array>
 #include <cstdint>
-#include <cstdlib>
 #include <cstring>
 #include <fstream>
 #include <iostream>
@@ -16,9 +15,6 @@
 #include <string_view>
 #include <unistd.h>
 #include <utility>
-
-#define TILE_SIZE 12288
-#define TILE_DIM  39
 
 static bool extract_vector(const std::string &array_str, double values[3])
 {
@@ -57,19 +53,26 @@ namespace rsvp
         this->format = data_format;
 
         // Create enough tile elements to store needed samples
-        size_t num_tiles = bands * ((lines + (TILE_DIM - 1)) / TILE_DIM) * ((samples + (TILE_DIM - 1)) / TILE_DIM);
-
-        // Align to 4KB, which is the standard page size on X86
-        // With 8-byte doubles, this gives us 512 entries per tile, a TILE_DIM-by-TILE_DIM square
-        this->pixel_data = static_cast<double *>(std::aligned_alloc(4096, TILE_SIZE * num_tiles));
+        int num_tiles = bands * ((lines + (22 - 1)) / 22) * ((samples + (22 - 1)) / 22);
+        for (int i = 0; i < num_tiles; i++) {
+            // We don't use shared_ptr here as it would double memory usage
+            // Align to 4KB, which is the standard page size on X86
+            // With 8-byte doubles, this gives us 512 entries per tile, a 22-by-22 square
+            double *tile_data = static_cast<double *>(std::aligned_alloc(4096, 4096));
+            if (tile_data == nullptr)
+            {
+                throw std::runtime_error(strerror(errno));
+            }
+            this->pixel_data.push_back(tile_data);
+        }
     }
 
     VicarData::~VicarData()
     {
         // Free up allocated space in pixel_data
-        if (this->pixel_data != nullptr)
+        for (double *tile : this->pixel_data)
         {
-            free(this->pixel_data);
+            free(tile);
         }
     }
 
@@ -351,12 +354,11 @@ namespace rsvp
         }
 
         // pixel_data is always organized as BSQ (no interlacing)
-        // Each tile is a TILE_DIM-by-TILE_DIM pixel image
-        size_t tile_rows = (this->NL + (TILE_DIM - 1)) / TILE_DIM, tile_cols = (this->NS + (TILE_DIM - 1)) / TILE_DIM;
-        size_t target_tile = (band * (tile_rows * tile_cols)) + ((line / TILE_DIM) * tile_cols) + (sample / TILE_DIM);
-        double *tile = this->pixel_data + ((TILE_SIZE / sizeof(double)) * target_tile);
+        // Each tile is a 22-by-22 pixel image
+        int tile_rows = (this->NL + (22 - 1)) / 22, tile_cols = (this->NS + (22 - 1)) / 22;
+        double *tile = this->pixel_data.at((band * (tile_rows * tile_cols)) + ((line / 22) * tile_cols) + (sample / 22));
         // Grab the value from the tile that contains it
-        value = *(tile + (((line % TILE_DIM) * TILE_DIM) + (sample % TILE_DIM)));
+        value = *(tile + (((line % 22) * 22) + (sample % 22)));
 
         return true;
     }
@@ -376,12 +378,11 @@ namespace rsvp
             return false;
         }
 
-        // Each tile is a TILE_DIM-by-TILE_DIM pixel image, in BSQ order
-        size_t tile_rows = (this->NL + (TILE_DIM - 1)) / TILE_DIM, tile_cols = (this->NS + (TILE_DIM - 1)) / TILE_DIM;
-        size_t target_tile = (band * (tile_rows * tile_cols)) + ((line / TILE_DIM) * tile_cols) + (sample / TILE_DIM);
-        double *tile = this->pixel_data + ((TILE_SIZE / sizeof(double)) * target_tile);
+        // Each tile is a 22-by-22 pixel image, in BSQ order
+        int tile_rows = (this->NL + (22 - 1)) / 22, tile_cols = (this->NS + (22 - 1)) / 22;
+        double *tile = this->pixel_data.at((band * (tile_rows * tile_cols)) + ((line / 22) * tile_cols) + (sample / 22));
         // Grab the value from the tile that contains it
-        *(tile + (((line % TILE_DIM) * TILE_DIM) + (sample % TILE_DIM))) = value;
+        *(tile + (((line % 22) * 22) + (sample % 22))) = value;
 
         return true;
     }
@@ -585,12 +586,18 @@ namespace rsvp
         int fmt_size = result->get_pixel_byte_count();
 
         // Create enough tile elements to store needed samples
-        size_t num_tiles = result->NB * ((result->NL + (TILE_DIM - 1)) / TILE_DIM) * ((result->NS + (TILE_DIM - 1)) / TILE_DIM);
-
-        // We don't use shared_ptr here as it would double memory usage
-        // Align to 4KB, which is the standard page size on X86
-        // With 8-byte doubles, this gives us 512 entries per tile, a TILE_DIM-by-TILE_DIM square            
-        result->pixel_data = static_cast<double *>(std::aligned_alloc(4096, TILE_SIZE * num_tiles));
+        int num_tiles = result->NB * ((result->NL + (22 - 1)) / 22) * ((result->NS + (22 - 1)) / 22);
+        for (int i = 0; i < num_tiles; i++) {
+            // We don't use shared_ptr here as it would double memory usage
+            // Align to 4KB, which is the standard page size on X86
+            // With 8-byte doubles, this gives us 512 entries per tile, a 22-by-22 square
+            double *tile_data = static_cast<double *>(std::aligned_alloc(4096, 4096));
+            if (tile_data == nullptr)
+            {
+                throw std::runtime_error(strerror(errno));
+            }
+            result->pixel_data.push_back(tile_data);
+        }
 
         int raw_data_is_int =
             (result->format == BYTE || result->format == HALF ||
@@ -660,8 +667,6 @@ namespace rsvp
                             path + ": Unhandled format type" +
                             std::to_string(result->format));
                     }
-
-                    int tile_rows = (result->NL + (TILE_DIM - 1)) / TILE_DIM, tile_cols = (result->NS + (TILE_DIM - 1)) / TILE_DIM;
 
                     switch (result->org)
                     {
