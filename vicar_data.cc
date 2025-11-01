@@ -9,7 +9,6 @@
 #include <cstring>
 #include <fstream>
 #include <iostream>
-#include <memory>
 #include <regex>
 #include <sstream>
 #include <stdexcept>
@@ -17,39 +16,6 @@
 #include <string_view>
 #include <unistd.h>
 #include <utility>
-
-#define PAGE_SIZE sysconf(_SC_PAGESIZE)
-
-// Image tile data structure to help speed up "get_interpolated_pixel_int"
-class VicarTile
-{
-private:
-    double *tile_data;
-public:
-    VicarTile()
-    {
-        // Allocate a tile aligned to a 4KB byte width
-        if (posix_memalign((void **)(&this->tile_data), 4096, 22 * 22) != 0)
-        {
-            throw std::runtime_error(strerror(errno));
-        }
-    }
-
-    ~VicarTile()
-    {
-        free(tile_data);
-    }
-
-    inline double get(int y, int x)
-    {
-        return tile_data[((y % 22) * 22) + (x % 22)];
-    }
-
-    inline void set(double &val, int y, int x)
-    {
-        tile_data[((y % 22) * 22) + (x % 22)] = val;
-    }
-};
 
 static bool extract_vector(const std::string &array_str, double values[3])
 {
