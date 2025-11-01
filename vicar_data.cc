@@ -18,8 +18,8 @@
 #include <unistd.h>
 #include <utility>
 
-#define TILE_SIZE 2048
-#define TILE_DIM  16
+#define TILE_SIZE 32
+#define TILE_DIM  2
 
 static bool extract_vector(const std::string &array_str, double values[3])
 {
@@ -337,9 +337,9 @@ namespace rsvp
     }
 
     inline bool VicarData::get_pixel_double(double &value,
-                                            const int sample,
-                                            const int line,
-                                            const int band) const
+                                     const int sample,
+                                     const int line,
+                                     const int band) const
     {
         if (line < 0 || sample < 0 || band < 0)
         {
@@ -356,7 +356,6 @@ namespace rsvp
         size_t tile_rows = (this->NL + (TILE_DIM - 1)) / TILE_DIM, tile_cols = (this->NS + (TILE_DIM - 1)) / TILE_DIM;
         size_t target_tile = (band * (tile_rows * tile_cols)) + ((line / TILE_DIM) * tile_cols) + (sample / TILE_DIM);
         double *tile = this->pixel_data + ((TILE_SIZE / sizeof(double)) * target_tile);
-
         // Grab the value from the tile that contains it
         value = *(tile + (((line % TILE_DIM) * TILE_DIM) + (sample % TILE_DIM)));
 
@@ -399,51 +398,39 @@ namespace rsvp
         double frac_x = fabs(x - int_x);
         double frac_y = fabs(y - int_y);
 
-        // Prefetch other non-upper-left items
-        size_t tile_rows = (this->NL + (TILE_DIM - 1)) / TILE_DIM, tile_cols = (this->NS + (TILE_DIM - 1)) / TILE_DIM;
+        double ur = 0.0, ul = 0.0, ll = 0.0, lr = 0.0;
 
-        size_t target_tile = (band * (tile_rows * tile_cols)) + ((int_y / TILE_DIM) * tile_cols) + ((int_x + 1) / TILE_DIM);
-        double *tile = this->pixel_data + ((TILE_SIZE / sizeof(double)) * target_tile);
-        __builtin_prefetch((const void*)(tile + (((int_y % TILE_DIM) * TILE_DIM) + ((int_x + 1) % TILE_DIM))), 0, 0);
+        bool has_err = true;
 
-        target_tile = (band * (tile_rows * tile_cols)) + (((int_y + 1) / TILE_DIM) * tile_cols) + (int_x / TILE_DIM);
-        tile = this->pixel_data + ((TILE_SIZE / sizeof(double)) * target_tile);
-        __builtin_prefetch((const void*)(tile + ((((int_y + 1) % TILE_DIM) * TILE_DIM) + (int_x % TILE_DIM))), 0, 0);
+        // The vanilla interpolation function reads left-to-right, up-to-down. But in the
+        // edge case where our x-value is on the edge of a tile, we'd have to access 2 pages
+        // inefficiently. In those cases, we can just access up-to-down first to minimize the
+        // performance impact.
+        if (int_x % TILE_DIM != TILE_DIM - 1)
+        {
+            // Get in upper left, upper right, then lower left and lower right
+            has_err &= get_pixel_double(ul, int_x, int_y, band);
+            has_err &= get_pixel_double(ur, int_x + 1, int_y, band);
+            has_err &= get_pixel_double(ll, int_x, int_y + 1, band);
+            has_err &= get_pixel_double(lr, int_x + 1, int_y + 1, band);
+        }
+        else
+        {
+            // Get upper and lower left first, then right if we're on the vertical edge of a tile
+            has_err &= get_pixel_double(ul, int_x, int_y, band);
+            has_err &= get_pixel_double(ll, int_x, int_y + 1, band);
+            has_err &= get_pixel_double(ur, int_x + 1, int_y, band);
+            has_err &= get_pixel_double(lr, int_x + 1, int_y + 1, band);
+        }
 
-        target_tile = (band * (tile_rows * tile_cols)) + (((int_y + 1) / TILE_DIM) * tile_cols) + ((int_x + 1) / TILE_DIM);
-        tile = this->pixel_data + ((TILE_SIZE / sizeof(double)) * target_tile);
-        __builtin_prefetch((const void*)(tile + ((((int_y + 1) % TILE_DIM) * TILE_DIM) + ((int_x + 1) % TILE_DIM))), 0, 0);
-
-        // Upper left (x, y)
-        double ul = 0.0;
-        if (!get_pixel_double(ul, int_x, int_y, band))
+        if (!has_err)
         {
             return false;
         }
+
         double ul_weight = (1.0 - frac_x) * (1.0 - frac_y);
-
-        // Upper right (x+1, y)
-        double ur = 0.0;
-        if (!get_pixel_double(ur, int_x + 1, int_y, band))
-        {
-            return false;
-        }
         double ur_weight = frac_x * (1.0 - frac_y);
-
-        // Lower left (x, y+1)
-        double ll = 0.0;
-        if (!get_pixel_double(ll, int_x, int_y + 1, band))
-        {
-            return false;
-        }
         double ll_weight = (1.0 - frac_x) * frac_y;
-
-        // Lower right (x+1, y+1)
-        double lr = 0.0;
-        if (!get_pixel_double(lr, int_x + 1, int_y + 1, band))
-        {
-            return false;
-        }
         double lr_weight = frac_x * frac_y;
 
         // Perform bilinear interpolation
@@ -471,7 +458,6 @@ namespace rsvp
         size_t tile_rows = (this->NL + (TILE_DIM - 1)) / TILE_DIM, tile_cols = (this->NS + (TILE_DIM - 1)) / TILE_DIM;
         size_t target_tile = (band * (tile_rows * tile_cols)) + ((line / TILE_DIM) * tile_cols) + (sample / TILE_DIM);
         double *tile = this->pixel_data + ((TILE_SIZE / sizeof(double)) * target_tile);
-
         // Grab the value from the tile that contains it
         *(tile + (((line % TILE_DIM) * TILE_DIM) + (sample % TILE_DIM))) = value;
 
