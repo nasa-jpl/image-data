@@ -321,28 +321,6 @@ namespace rsvp
         int_opposite_endian = host_little_endian != int_little_endian;
     }
 
-    inline bool VicarData::get_pixel_double(double &value,
-                                            const int sample,
-                                            const int line,
-                                            const int band) const
-    {
-        if (line < 0 || sample < 0 || band < 0)
-        {
-            return false;
-        }
-
-        if (line >= NL || sample >= NS || band >= NB)
-        {
-            return false;
-        }
-
-        // pixel_data is always organized as BSQ
-        // (no interlacing)
-        value = pixel_data[static_cast<size_t>(band * (NL * NS) + line * NS +
-                                               sample)];
-        return true;
-    }
-
     bool VicarData::get_interpolated_pixel_double(double &value,
                                                   const double x,
                                                   const double y,
