@@ -3,14 +3,14 @@
 
 #include "image_data.h"
 
-#include <memory>
+#include <array>
+#include <cstddef>
+#include <string_view>
 #include <unordered_map>
-#include <vector>
 
 
 namespace rsvp
 {
-
 
     /**
      * @brief A class to read data from Vicar/PDS files.
@@ -121,11 +121,6 @@ namespace rsvp
          * @param format The data format, either BYTE, HALF, FULL, REAL, or DOUB (COMP not supported)
          */
         VicarData(int samples, int lines, int bands, DataFormat format);
-
-        /**
-         * @brief Destructor for vicarfiles that are now out of scope
-         */
-        ~VicarData();
 
         /**
          * @brief The organization of the binary data.
@@ -262,7 +257,7 @@ namespace rsvp
         int NBB; // Number of bytes of binary prefix before each record
         int NLB; // Number of lines of binary header at the top of the file
 
-        std::vector<double *>
+        std::unique_ptr<double[]>
             pixel_data; // Pixel data that has been re-shuffled and
                         // casted to double precision with BSQ
                         // organization. This is usually the most
@@ -307,7 +302,6 @@ namespace rsvp
         {
             return N3;
         }
-
 
     public:
         /**
