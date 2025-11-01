@@ -321,10 +321,10 @@ namespace rsvp
         int_opposite_endian = host_little_endian != int_little_endian;
     }
 
-    bool VicarData::get_pixel_double(double &value,
-                                     const int sample,
-                                     const int line,
-                                     const int band) const
+    inline bool VicarData::get_pixel_double(double &value,
+                                            const int sample,
+                                            const int line,
+                                            const int band) const
     {
         if (line < 0 || sample < 0 || band < 0)
         {
@@ -378,9 +378,6 @@ namespace rsvp
 
         double frac_x = fabs(x - int_x);
         double frac_y = fabs(y - int_y);
-
-        // Prefetch the lower left and right elements
-        __builtin_prefetch((void *)(&pixel_data + (band * (NL * NS) + (int_y + 1) * NS + int_x)), 0, 0);
 
         // Upper left (x, y)
         double ul = 0.0;
