@@ -4,7 +4,6 @@
 
 #include <algorithm>
 #include <array>
-#include <cmath>
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
@@ -359,80 +358,6 @@ namespace rsvp
         // Grab the value from the tile that contains it
         value = *(tile + (((line % TILE_DIM) * TILE_DIM) + (sample % TILE_DIM)));
 
-        return true;
-    }
-
-    bool VicarData::get_interpolated_pixel_double(double &value,
-                                                  const double x,
-                                                  const double y,
-                                                  const int band) const
-    {
-        // If we've been asked not to interpolate data, snap to the nearest
-        // whole pixel and return that data
-        if (!get_interpolating())
-        {
-            int x_uninterp =
-                x > 0 ? static_cast<int>(x + 0.5) : static_cast<int>(x - 0.5);
-            int y_uninterp =
-                y > 0 ? static_cast<int>(y + 0.5) : static_cast<int>(y - 0.5);
-            return get_pixel_double(value, x_uninterp, y_uninterp, band);
-        }
-
-        int int_x = static_cast<int>(x);
-        int int_y = static_cast<int>(y);
-
-        if (int_x < 0.0)
-        {
-            // We sample at (int_x) and (int_x+1), so make sure that
-            // those two span the input
-            int_x--;
-        }
-
-        if (int_y < 0.0)
-        {
-            // We sample at (int_y) and (int_y+1), so make sure that
-            // those two span the input
-            int_y--;
-        }
-
-        double frac_x = fabs(x - int_x);
-        double frac_y = fabs(y - int_y);
-
-        double ur = 0.0, ul = 0.0, ll = 0.0, lr = 0.0;
-
-        bool has_err = true;
-
-        // Read with tile awareness in mind - so we don't incur 4x cache accesses
-        if (int_x % TILE_DIM == TILE_DIM - 1 && int_y % TILE_DIM != TILE_DIM - 1)
-        {
-            // Get upper and lower left first, then right if we're on the vertical edge of a tile
-            has_err &= get_pixel_double(ul, int_x, int_y, band);
-            has_err &= get_pixel_double(ll, int_x, int_y + 1, band);
-            has_err &= get_pixel_double(ur, int_x + 1, int_y, band);
-            has_err &= get_pixel_double(lr, int_x + 1, int_y + 1, band);
-        }
-        else
-        { 
-            // Otherwise get in upper left, upper right, then lower left and lower right
-            has_err &= get_pixel_double(ul, int_x, int_y, band);
-            has_err &= get_pixel_double(ll, int_x, int_y + 1, band);
-            has_err &= get_pixel_double(ur, int_x + 1, int_y, band);
-            has_err &= get_pixel_double(lr, int_x + 1, int_y + 1, band);
-        }
-
-        if (!has_err)
-        {
-            return false;
-        }
-
-        double ul_weight = (1.0 - frac_x) * (1.0 - frac_y);
-        double ur_weight = frac_x * (1.0 - frac_y);
-        double ll_weight = (1.0 - frac_x) * frac_y;
-        double lr_weight = frac_x * frac_y;
-
-        // Perform bilinear interpolation
-        value =
-            ul * ul_weight + ur * ur_weight + ll * ll_weight + lr * lr_weight;
         return true;
     }
 
