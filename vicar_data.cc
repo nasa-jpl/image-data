@@ -17,8 +17,8 @@
 #include <unistd.h>
 #include <utility>
 
-#define TILE_SIZE 2048
-#define TILE_DIM  16
+#define TILE_SIZE 1024
+#define TILE_DIM  11
 
 static bool extract_vector(const std::string &array_str, double values[3])
 {
