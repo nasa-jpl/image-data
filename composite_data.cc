@@ -115,10 +115,9 @@ namespace rsvp
             double height = 0.0;
             double alpha = 0.0;
 
-            // Cache image pointer to avoid redundant lookups and bounds checks
-            const auto& img = images[i];
-            if (!img->get_interpolated_pixel_double(height, x, y, b) ||
-                !img->get_interpolated_pixel_double(alpha, x, y, 2))
+            if (!images.at(i)->get_interpolated_pixel_double(
+                    height, x, y, b) ||
+                !images.at(i)->get_interpolated_pixel_double(alpha, x, y, 2))
             {
                 // If this image doesn't have a value or an alpha value at this
                 // point, skip it
@@ -181,16 +180,14 @@ namespace rsvp
             double current_height = 0.0;
             double current_alpha = 0.0;
 
-            // Cache image pointer to avoid redundant lookups and bounds checks
-            const auto& img = images[i];
-
-            if (img->get_bands() == 1)
+            if (images.at(i)->get_bands() == 1)
             {
                 // Usually we composite `VicarData` images, which have three
                 // bands (raw, interpolated, alpha), but we also want to
                 // support using `PGMData` images (one raw band). Switch the
                 // user-requested band for band 0.
-                if (!img->get_interpolated_pixel_double(current_height, x, y, 0))
+                if (!images.at(i)->get_interpolated_pixel_double(
+                        current_height, x, y, 0))
                 {
                     continue;
                 }
@@ -205,7 +202,7 @@ namespace rsvp
                 // do the expected thing.
 
                 // Check the image bounds
-                if (!img->get_interpolated_pixel_double(
+                if (!images.at(i)->get_interpolated_pixel_double(
                         current_height, x, y, b))
                 {
                     // Coordinates are out of bounds of image data, so skip
@@ -214,14 +211,16 @@ namespace rsvp
                 }
 
                 // Get the alpha value
-                const auto img_alpha_band = img->get_alpha_band();
-                if (img_alpha_band < 0)
+                if (images.at(i)->get_alpha_band() < 0)
                 {
                     // No alpha band defined for image, so just call it opaque.
                     current_alpha = 255.0;
                 }
-                else if (!img->get_interpolated_pixel_double(
-                             current_alpha, x, y, img_alpha_band))
+                else if (!images.at(i)->get_interpolated_pixel_double(
+                             current_alpha,
+                             x,
+                             y,
+                             images.at(i)->get_alpha_band()))
                 {
                     // Valid data value, but no alpha value at this pixel
                     // This should not be able to happen
@@ -296,13 +295,10 @@ namespace rsvp
             double current_score = 0.0;
             double current_value = 0.0;
 
-            // Cache image pointer to avoid redundant lookups and bounds checks
-            const auto& img = images[i];
-            const int img_alpha_band = img->get_alpha_band();
-
-            if (!img->get_interpolated_pixel_double(
-                    current_score, x, y, img_alpha_band) ||
-                !img->get_interpolated_pixel_double(current_value, x, y, b))
+            if (!images.at(i)->get_interpolated_pixel_double(
+                    current_score, x, y, images.at(i)->get_alpha_band()) ||
+                !images.at(i)->get_interpolated_pixel_double(
+                    current_value, x, y, b))
             {
                 // If this image doesn't have a value or an alpha value at this
                 // point, skip it
