@@ -214,14 +214,14 @@ namespace rsvp
                 }
 
                 // Get the alpha value
-                const auto alpha_band = img->get_alpha_band();
-                if (alpha_band < 0)
+                const auto img_alpha_band = img->get_alpha_band();
+                if (img_alpha_band < 0)
                 {
                     // No alpha band defined for image, so just call it opaque.
                     current_alpha = 255.0;
                 }
                 else if (!img->get_interpolated_pixel_double(
-                             current_alpha, x, y, alpha_band))
+                             current_alpha, x, y, img_alpha_band))
                 {
                     // Valid data value, but no alpha value at this pixel
                     // This should not be able to happen
@@ -298,10 +298,10 @@ namespace rsvp
 
             // Cache image pointer to avoid redundant lookups and bounds checks
             const auto& img = images[i];
-            int alpha_band = img->get_alpha_band();
+            const int img_alpha_band = img->get_alpha_band();
 
             if (!img->get_interpolated_pixel_double(
-                    current_score, x, y, alpha_band) ||
+                    current_score, x, y, img_alpha_band) ||
                 !img->get_interpolated_pixel_double(current_value, x, y, b))
             {
                 // If this image doesn't have a value or an alpha value at this
