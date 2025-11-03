@@ -332,10 +332,27 @@ namespace rsvp
          *
          * @return A boolean indicating whether the pixel was successfully gotten
          */
-        bool get_pixel_double(double &value,
-                              int sample,
-                              int line,
-                              int band) const override;
+        inline bool get_pixel_double(double &value,
+                                     int sample,
+                                     int line,
+                                     int band) const override
+        {
+            if (line < 0 || sample < 0 || band < 0)
+            {
+                return false;
+            }
+
+            if (line >= NL || sample >= NS || band >= NB)
+            {
+                return false;
+            }
+
+            // pixel_data is always organized as BSQ
+            // (no interlacing)
+            value = pixel_data[static_cast<size_t>(band * (NL * NS) + line * NS +
+                                                   sample)];
+            return true;
+        }
 
         /*
          * @brief Set a pixel of the image from a double value
