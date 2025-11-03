@@ -243,9 +243,10 @@ namespace rsvp
 
             // Bayer format is RGGB with each field being 8 bits
             // Green takes up 2 fields
-            for (int x = 0; x < width; x++)
+            // Loop order optimized for cache-friendly sequential memory access
+            for (int y = 0; y < height; y++)
             {
-                for (int y = 0; y < height; y++)
+                for (int x = 0; x < width; x++)
                 {
                     data[y * width + x].red = 0;
                     data[y * width + x].green = 0;
@@ -284,9 +285,10 @@ namespace rsvp
 
             // We will average all bands (PANCHROMATIC)
             // Single band images will simply copy their data
-            for (int x = 0; x < width; x++)
+            // Loop order optimized for cache-friendly sequential memory access
+            for (int y = 0; y < height; y++)
             {
-                for (int y = 0; y < height; y++)
+                for (int x = 0; x < width; x++)
                 {
                     int band_sum = 0;
                     for (int band = 0; band < number_of_bands; band++)
@@ -330,9 +332,10 @@ namespace rsvp
             }
 
             // We assume the only band is BLUE
-            for (int x = 0; x < width; x++)
+            // Loop order optimized for cache-friendly sequential memory access
+            for (int y = 0; y < height; y++)
             {
-                for (int y = 0; y < height; y++)
+                for (int x = 0; x < width; x++)
                 {
                     int pix_val;
                     get_pixel_int(pix_val, x, y, chosen_band);
