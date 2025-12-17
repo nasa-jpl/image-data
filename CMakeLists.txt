@@ -27,6 +27,8 @@ add_library(
     composite_data.h
     csv_data.cc
     csv_data.h
+    feathered_composite_data.cc
+    feathered_composite_data.h
     image_data.cc
     image_data.h
     mod_data.cc
