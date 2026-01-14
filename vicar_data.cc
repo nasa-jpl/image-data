@@ -952,4 +952,77 @@ namespace rsvp
                    "GEOMETRIC_CAMERA_MODEL", "MODEL_COMPONENT_7", raw_value) &&
             extract_vector(raw_value, camera_e);
     }
+
+    TerrainBounds VicarData::get_bounds() const
+    {
+        TerrainBounds bounds;
+
+        auto property = label_values.find("SURFACE_PROJECTION_PARMS");
+        if (property == label_values.end())
+        {
+            return bounds;
+        }
+
+        const auto &labels = property->second;
+        auto x_min_iter = labels.find("X_AXIS_MINIMUM");
+        auto y_min_iter = labels.find("Y_AXIS_MINIMUM");
+        auto map_scale_iter = labels.find("MAP_SCALE");
+
+        if (x_min_iter == labels.end() || y_min_iter == labels.end() ||
+            map_scale_iter == labels.end())
+        {
+            return bounds;
+        }
+
+        double x_min, y_min, map_scale_x, map_scale_y;
+
+        try
+        {
+            x_min = std::stod(x_min_iter->second);
+        }
+        catch (const std::logic_error &)
+        {
+            return bounds;
+        }
+
+        try
+        {
+            y_min = std::stod(y_min_iter->second);
+        }
+        catch (const std::logic_error &)
+        {
+            return bounds;
+        }
+
+        const std::string &map_scale_str = map_scale_iter->second;
+        if (map_scale_str.find('(') != std::string::npos)
+        {
+            if (sscanf(map_scale_str.c_str(),
+                       "(%lf,%lf)",
+                       &map_scale_x,
+                       &map_scale_y) != 2)
+            {
+                return bounds;
+            }
+        }
+        else
+        {
+            try
+            {
+                map_scale_x = map_scale_y = std::stod(map_scale_str);
+            }
+            catch (const std::logic_error &)
+            {
+                return bounds;
+            }
+        }
+
+        bounds.valid = true;
+        bounds.min_x = x_min;
+        bounds.min_y = y_min;
+        bounds.max_x = x_min + (get_width() * map_scale_x);
+        bounds.max_y = y_min + (get_height() * map_scale_y);
+
+        return bounds;
+    }
 } // namespace rsvp

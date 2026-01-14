@@ -107,6 +107,14 @@ namespace rsvp
                                                              const double y,
                                                              const int b) const
     {
+        // Note: When interpolation is disabled via set_interpolating(false),
+        // we still call get_interpolated_pixel_double on child images.
+        // The interpolation flag is passed through to children via
+        // TranslatedData::set_interpolating, so each child will do
+        // nearest-neighbor rounding in its own coordinate space.
+        // This is correct because child images need to transform world
+        // coordinates to their pixel coordinates before rounding.
+
         double weighted_sum = 0.0;
         double summed_alpha = 0.0;
 
@@ -171,12 +179,19 @@ namespace rsvp
     bool AlphaBlendingCompositeData::get_interpolated_pixel_double(
         double &value, const double x, const double y, const int b) const
     {
+        // Note: When interpolation is disabled via set_interpolating(false),
+        // we still call get_interpolated_pixel_double on child images.
+        // The interpolation flag is passed through to children via
+        // TranslatedData::set_interpolating, so each child will do
+        // nearest-neighbor rounding in its own coordinate space.
+        // This is correct because child images need to transform world
+        // coordinates to their pixel coordinates before rounding.
+
         double total_alpha = 0.0;
         value = 0.0;
 
         for (int i = 0; i < get_count(); i++)
         {
-
             double current_height = 0.0;
             double current_alpha = 0.0;
 
@@ -274,6 +289,83 @@ namespace rsvp
         return total_alpha > minimum_real_alpha;
     }
 
+    bool FirstValidCompositeData::get_pixel_double(double &value,
+                                                   const int x,
+                                                   const int y,
+                                                   const int b) const
+    {
+        return get_interpolated_pixel_double(
+            value, static_cast<double>(x), static_cast<double>(y), b);
+    }
+
+    bool FirstValidCompositeData::get_interpolated_pixel_double(
+        double &value, const double x, const double y, const int b) const
+    {
+        // Note: When interpolation is disabled via set_interpolating(false),
+        // we still call get_interpolated_pixel_double on child images.
+        // The interpolation flag is passed through to children via
+        // TranslatedData::set_interpolating, so each child will do
+        // nearest-neighbor rounding in its own coordinate space.
+        // This is correct because child images need to transform world
+        // coordinates to their pixel coordinates before rounding.
+
+        // Simply return the first valid pixel without any blending.
+        // This is appropriate for orbital DEMs where tiles have identical
+        // edge pixels and blending would create artificial discontinuities.
+        for (int i = 0; i < get_count(); i++)
+        {
+            double current_height = 0.0;
+
+            if (images.at(i)->get_bands() == 1)
+            {
+                // Support single-band images (PGM format)
+                if (images.at(i)->get_interpolated_pixel_double(
+                        current_height, x, y, 0))
+                {
+                    value = current_height;
+                    return true;
+                }
+            }
+            else
+            {
+                // Multi-band images - check alpha for validity
+                double current_alpha = 0.0;
+
+                // Check if pixel is in bounds
+                if (!images.at(i)->get_interpolated_pixel_double(
+                        current_height, x, y, b))
+                {
+                    continue;
+                }
+
+                // Get alpha value
+                if (images.at(i)->get_alpha_band() < 0)
+                {
+                    // No alpha band - assume valid
+                    value = current_height;
+                    return true;
+                }
+                else if (!images.at(i)->get_interpolated_pixel_double(
+                             current_alpha, x, y,
+                             images.at(i)->get_alpha_band()))
+                {
+                    // Has alpha band but no alpha at this pixel - skip
+                    continue;
+                }
+
+                // Check if alpha indicates valid data (> 1.01)
+                if (current_alpha > 1.01)
+                {
+                    value = current_height;
+                    return true;
+                }
+            }
+        }
+
+        // No valid data found in any image
+        return false;
+    }
+
     bool ScoredCompositeData::get_pixel_double(double &value,
                                                const int x,
                                                const int y,
@@ -287,6 +379,13 @@ namespace rsvp
                                                             const double y,
                                                             const int b) const
     {
+        // Note: When interpolation is disabled via set_interpolating(false),
+        // we still call get_interpolated_pixel_double on child images.
+        // The interpolation flag is passed through to children via
+        // TranslatedData::set_interpolating, so each child will do
+        // nearest-neighbor rounding in its own coordinate space.
+        // This is correct because child images need to transform world
+        // coordinates to their pixel coordinates before rounding.
 
         double max_score = std::numeric_limits<double>::min();
 
@@ -313,6 +412,37 @@ namespace rsvp
         }
 
         return value > std::numeric_limits<double>::min();
+    }
+
+    TerrainBounds CompositeData::get_bounds() const
+    {
+        TerrainBounds combined_bounds;
+
+        for (const auto &image : images)
+        {
+            if (image)
+            {
+                TerrainBounds image_bounds = image->get_bounds();
+                combined_bounds.merge(image_bounds);
+            }
+        }
+
+        return combined_bounds;
+    }
+
+    void CompositeData::set_interpolating(bool enable)
+    {
+        // Set interpolation flag on this composite
+        ImageData::set_interpolating(enable);
+
+        // Pass through to all child images
+        for (const auto &image : images)
+        {
+            if (image)
+            {
+                image->set_interpolating(enable);
+            }
+        }
     }
 
 }

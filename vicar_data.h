@@ -536,6 +536,8 @@ namespace rsvp
             return NB;
         }
 
+        TerrainBounds get_bounds() const override;
+
         bool get_camera_cahv_frame(std::string &frame) const;
 
         bool get_camera_c(double camera_c[3]) const;

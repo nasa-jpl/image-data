@@ -176,6 +176,8 @@ namespace rsvp
         {
             return transformed_image ? transformed_image->get_height() : 0;
         }
+
+        TerrainBounds get_bounds() const override;
     };
 }
 
