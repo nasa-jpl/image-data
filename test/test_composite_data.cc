@@ -337,3 +337,348 @@ TEST(composite_data, scored_composite_data)
     // coordinates
     EXPECT_TRUE(composite.get_pixel_double(value, 1, 1, 0));
 }
+
+// Test interpolation passthrough in CompositeData
+TEST(composite_data, interpolation_passthrough)
+{
+    rsvp::AlphaBlendingCompositeData composite;
+
+    // Create test images with interpolation enabled
+    auto img1 = std::make_shared<CompositeTestImage>(3);
+    auto img2 = std::make_shared<CompositeTestImage>(3);
+
+    img1->set_alpha_band(2);
+    img2->set_alpha_band(2);
+
+    // Initially, interpolation should be enabled
+    EXPECT_TRUE(img1->get_interpolating());
+    EXPECT_TRUE(img2->get_interpolating());
+
+    composite.add_image(img1);
+    composite.add_image(img2);
+
+    // Disable interpolation on composite
+    composite.set_interpolating(false);
+
+    // Verify interpolation flag propagated to child images
+    EXPECT_FALSE(img1->get_interpolating());
+    EXPECT_FALSE(img2->get_interpolating());
+
+    // Re-enable interpolation on composite
+    composite.set_interpolating(true);
+
+    // Verify flag propagated again
+    EXPECT_TRUE(img1->get_interpolating());
+    EXPECT_TRUE(img2->get_interpolating());
+}
+
+// Test FirstValidCompositeData - returns first valid pixel without blending
+TEST(composite_data, first_valid_composite_data)
+{
+    // Create test image with opaque alpha values (255)
+    class OpaqueTestImage : public CompositeTestImage
+    {
+    public:
+        OpaqueTestImage(double height_value) :
+            CompositeTestImage(3), height_val(height_value)
+        {
+        }
+
+        bool get_pixel_double(double &value,
+                              int x,
+                              int y,
+                              int band) const override
+        {
+            if (x < 0 || x >= 3 || y < 0 || y >= 3)
+            {
+                return false;
+            }
+
+            if (band == 1)
+            {
+                // Height band - return constant height
+                value = height_val;
+            }
+            else if (band == 2)
+            {
+                // Alpha band - return opaque
+                value = 255.0;
+            }
+            else
+            {
+                value = 0.0;
+            }
+            return true;
+        }
+
+        bool get_interpolated_pixel_double(double &value,
+                                           double x,
+                                           double y,
+                                           int band) const override
+        {
+            // For this test, just use nearest neighbor
+            return get_pixel_double(value,
+                                    static_cast<int>(x + 0.5),
+                                    static_cast<int>(y + 0.5),
+                                    band);
+        }
+
+    private:
+        double height_val;
+    };
+
+    rsvp::FirstValidCompositeData composite;
+
+    // Create two overlapping tiles with different heights but same alpha
+    auto tile1 = std::make_shared<OpaqueTestImage>(100.0);  // 100m height
+    auto tile2 = std::make_shared<OpaqueTestImage>(50.0);   // 50m height
+
+    tile1->set_alpha_band(2);
+    tile2->set_alpha_band(2);
+
+    composite.add_image(tile1);
+    composite.add_image(tile2);
+
+    double value = 0.0;
+
+    // FirstValidCompositeData should always use first valid tile
+    EXPECT_TRUE(composite.get_interpolated_pixel_double(value, 1.0, 1.0, 1));
+    EXPECT_DOUBLE_EQ(value, 100.0);  // Should use tile1 (first valid)
+
+    // Test with invalid first tile - should fall through to second tile
+    rsvp::FirstValidCompositeData composite2;
+
+    // Create image with no valid data (alpha=1, which means no data)
+    class InvalidTestImage : public OpaqueTestImage
+    {
+    public:
+        InvalidTestImage() : OpaqueTestImage(999.0) {}
+
+        bool get_pixel_double(double &value, int x, int y, int band) const override
+        {
+            if (x < 0 || x >= 3 || y < 0 || y >= 3)
+            {
+                return false;
+            }
+
+            if (band == 2)
+            {
+                // Alpha band - return 1 (no valid data)
+                value = 1.0;
+            }
+            else
+            {
+                value = 999.0;
+            }
+            return true;
+        }
+    };
+
+    auto invalid_tile = std::make_shared<InvalidTestImage>();
+    invalid_tile->set_alpha_band(2);
+
+    composite2.add_image(invalid_tile);
+    composite2.add_image(tile2);
+
+    // Should skip first tile (invalid) and use second tile
+    EXPECT_TRUE(composite2.get_interpolated_pixel_double(value, 1.0, 1.0, 1));
+    EXPECT_DOUBLE_EQ(value, 50.0);  // Should use tile2
+}
+
+// Test FirstValidCompositeData with additional edge cases
+TEST(composite_data, first_valid_composite_data_edge_cases)
+{
+    // Test 1: Empty composite returns false
+    rsvp::FirstValidCompositeData empty_composite;
+    double value = 0.0;
+    EXPECT_FALSE(empty_composite.get_interpolated_pixel_double(value, 1.0, 1.0, 1));
+    EXPECT_FALSE(empty_composite.get_pixel_double(value, 1, 1, 1));
+
+    // Test 2: Out of bounds coordinates
+    rsvp::FirstValidCompositeData oob_composite;
+    auto img = std::make_shared<CompositeTestImage>(3);
+    img->set_alpha_band(2);
+    oob_composite.add_image(img);
+
+    // Out of bounds should skip to next image or return false
+    EXPECT_FALSE(oob_composite.get_interpolated_pixel_double(value, 100.0, 100.0, 1));
+    EXPECT_FALSE(oob_composite.get_pixel_double(value, 100, 100, 1));
+
+    // Test 3: Single-band image (PGM format)
+    class SingleBandTestImage : public CompositeTestImage
+    {
+    public:
+        SingleBandTestImage() : CompositeTestImage(1) {}
+
+        int get_bands() const override { return 1; }
+
+        bool get_pixel_double(double &value, int x, int y, int band) const override
+        {
+            if (x < 0 || x >= 3 || y < 0 || y >= 3 || band != 0)
+            {
+                return false;
+            }
+            value = 42.0;
+            return true;
+        }
+
+        bool get_interpolated_pixel_double(double &value, double x, double y, int band) const override
+        {
+            return get_pixel_double(value, static_cast<int>(x + 0.5), static_cast<int>(y + 0.5), band);
+        }
+    };
+
+    rsvp::FirstValidCompositeData single_band_composite;
+    auto single_band_img = std::make_shared<SingleBandTestImage>();
+    single_band_composite.add_image(single_band_img);
+
+    EXPECT_TRUE(single_band_composite.get_interpolated_pixel_double(value, 1.0, 1.0, 0));
+    EXPECT_DOUBLE_EQ(value, 42.0);
+    EXPECT_TRUE(single_band_composite.get_pixel_double(value, 1, 1, 0));
+    EXPECT_DOUBLE_EQ(value, 42.0);
+
+    // Test 4: Image with no alpha band (alpha_band < 0)
+    class NoAlphaBandImage : public CompositeTestImage
+    {
+    public:
+        NoAlphaBandImage() : CompositeTestImage(2) {}
+
+        int get_alpha_band() const override { return -1; }
+
+        bool get_pixel_double(double &value, int x, int y, int band) const override
+        {
+            if (x < 0 || x >= 3 || y < 0 || y >= 3)
+            {
+                return false;
+            }
+            value = (band == 1) ? 123.0 : 0.0;
+            return true;
+        }
+
+        bool get_interpolated_pixel_double(double &value, double x, double y, int band) const override
+        {
+            return get_pixel_double(value, static_cast<int>(x + 0.5), static_cast<int>(y + 0.5), band);
+        }
+    };
+
+    rsvp::FirstValidCompositeData no_alpha_composite;
+    auto no_alpha_img = std::make_shared<NoAlphaBandImage>();
+    no_alpha_composite.add_image(no_alpha_img);
+
+    EXPECT_TRUE(no_alpha_composite.get_interpolated_pixel_double(value, 1.0, 1.0, 1));
+    EXPECT_DOUBLE_EQ(value, 123.0);
+
+    // Test 5: Image with alpha band but no alpha at specific pixel
+    class MissingAlphaImage : public CompositeTestImage
+    {
+    public:
+        MissingAlphaImage() : CompositeTestImage(3) {}
+
+        bool get_pixel_double(double &value, int x, int y, int band) const override
+        {
+            if (x < 0 || x >= 3 || y < 0 || y >= 3)
+            {
+                return false;
+            }
+
+            if (band == 2)  // Alpha band
+            {
+                // Only center pixel has alpha
+                if (x == 1 && y == 1)
+                {
+                    value = 255.0;
+                    return true;
+                }
+                return false;  // No alpha at other pixels
+            }
+
+            value = (band == 1) ? 77.0 : 0.0;
+            return true;
+        }
+
+        bool get_interpolated_pixel_double(double &value, double x, double y, int band) const override
+        {
+            return get_pixel_double(value, static_cast<int>(x + 0.5), static_cast<int>(y + 0.5), band);
+        }
+    };
+
+    rsvp::FirstValidCompositeData missing_alpha_composite;
+    auto missing_alpha_img = std::make_shared<MissingAlphaImage>();
+    missing_alpha_img->set_alpha_band(2);
+
+    auto fallback_img = std::make_shared<CompositeTestImage>(3);
+    fallback_img->set_alpha_band(2);
+
+    missing_alpha_composite.add_image(missing_alpha_img);
+    missing_alpha_composite.add_image(fallback_img);
+
+    // At (0,0), first image has no alpha, should use second image
+    EXPECT_TRUE(missing_alpha_composite.get_interpolated_pixel_double(value, 0.0, 0.0, 1));
+    // At (1,1), first image has alpha, should use first image
+    EXPECT_TRUE(missing_alpha_composite.get_interpolated_pixel_double(value, 1.0, 1.0, 1));
+    EXPECT_DOUBLE_EQ(value, 77.0);
+}
+
+// Test get_bounds for CompositeData
+TEST(composite_data, composite_bounds)
+{
+    // Create test image with known bounds
+    class BoundsTestImage : public CompositeTestImage
+    {
+    public:
+        rsvp::TerrainBounds get_bounds() const override
+        {
+            rsvp::TerrainBounds bounds;
+            bounds.valid = true;
+            bounds.min_x = 10.0;
+            bounds.max_x = 20.0;
+            bounds.min_y = 30.0;
+            bounds.max_y = 40.0;
+            return bounds;
+        }
+    };
+
+    rsvp::AlphaBlendingCompositeData composite;
+
+    // Empty composite should return invalid bounds
+    auto bounds = composite.get_bounds();
+    EXPECT_FALSE(bounds.valid);
+
+    // Add first image
+    auto img1 = std::make_shared<BoundsTestImage>();
+    composite.add_image(img1);
+
+    bounds = composite.get_bounds();
+    EXPECT_TRUE(bounds.valid);
+    EXPECT_DOUBLE_EQ(bounds.min_x, 10.0);
+    EXPECT_DOUBLE_EQ(bounds.max_x, 20.0);
+    EXPECT_DOUBLE_EQ(bounds.min_y, 30.0);
+    EXPECT_DOUBLE_EQ(bounds.max_y, 40.0);
+
+    // Add second image with different bounds
+    class BoundsTestImage2 : public CompositeTestImage
+    {
+    public:
+        rsvp::TerrainBounds get_bounds() const override
+        {
+            rsvp::TerrainBounds bounds;
+            bounds.valid = true;
+            bounds.min_x = 15.0;
+            bounds.max_x = 25.0;
+            bounds.min_y = 25.0;
+            bounds.max_y = 35.0;
+            return bounds;
+        }
+    };
+
+    auto img2 = std::make_shared<BoundsTestImage2>();
+    composite.add_image(img2);
+
+    // Bounds should be the union of both images
+    bounds = composite.get_bounds();
+    EXPECT_TRUE(bounds.valid);
+    EXPECT_DOUBLE_EQ(bounds.min_x, 10.0);  // min from img1
+    EXPECT_DOUBLE_EQ(bounds.max_x, 25.0);  // max from img2
+    EXPECT_DOUBLE_EQ(bounds.min_y, 25.0);  // min from img2
+    EXPECT_DOUBLE_EQ(bounds.max_y, 40.0);  // max from img1
+}

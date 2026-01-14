@@ -229,4 +229,50 @@ namespace rsvp
             return ImageData::get_interpolating();
         }
     }
+
+    TerrainBounds TranslatedData::get_bounds() const
+    {
+        if (!transformed_image)
+        {
+            return TerrainBounds();
+        }
+
+        TerrainBounds underlying_bounds = transformed_image->get_bounds();
+        if (!underlying_bounds.valid)
+        {
+            return underlying_bounds;
+        }
+
+        double corners_x[4];
+        double corners_y[4];
+
+        corners_x[0] = t_x;
+        corners_y[0] = t_y;
+
+        corners_x[1] = txx * get_width() + t_x;
+        corners_y[1] = txy * get_width() + t_y;
+
+        corners_x[2] = tyx * get_height() + t_x;
+        corners_y[2] = tyy * get_height() + t_y;
+
+        corners_x[3] = txx * get_width() + tyx * get_height() + t_x;
+        corners_y[3] = txy * get_width() + tyy * get_height() + t_y;
+
+        TerrainBounds result;
+        result.valid = true;
+        result.min_x = corners_x[0];
+        result.max_x = corners_x[0];
+        result.min_y = corners_y[0];
+        result.max_y = corners_y[0];
+
+        for (int i = 1; i < 4; i++)
+        {
+            result.min_x = std::min(result.min_x, corners_x[i]);
+            result.max_x = std::max(result.max_x, corners_x[i]);
+            result.min_y = std::min(result.min_y, corners_y[i]);
+            result.max_y = std::max(result.max_y, corners_y[i]);
+        }
+
+        return result;
+    }
 }
