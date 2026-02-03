@@ -126,6 +126,41 @@ namespace rsvp
         int get_bands() const override;
 
         /**
+         * @brief Get the underlying source image.
+         *
+         * @return The source ImageData being transformed
+         */
+        std::shared_ptr<ImageData> get_source_image() const
+        {
+            return transformed_image;
+        }
+
+        /**
+         * @brief Get the transform parameters.
+         *
+         * @param[out] out_t_x  The x offset
+         * @param[out] out_t_y  The y offset
+         * @param[out] out_txx  The xx scaling
+         * @param[out] out_tyx  The yx skew
+         * @param[out] out_txy  The xy skew
+         * @param[out] out_tyy  The yy scaling
+         */
+        void get_transform(double &out_t_x,
+                           double &out_t_y,
+                           double &out_txx,
+                           double &out_tyx,
+                           double &out_txy,
+                           double &out_tyy) const
+        {
+            out_t_x = t_x;
+            out_t_y = t_y;
+            out_txx = txx;
+            out_tyx = tyx;
+            out_txy = txy;
+            out_tyy = tyy;
+        }
+
+        /**
          * @brief Set the image band associated with the alpha blending
          * value.
          *

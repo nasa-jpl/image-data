@@ -16,11 +16,11 @@ namespace rsvp
      */
     struct TerrainBounds
     {
-        bool valid = false;     ///< Whether the bounds are valid
-        double min_x = 0.0;     ///< Minimum X coordinate (meters)
-        double max_x = 0.0;     ///< Maximum X coordinate (meters)
-        double min_y = 0.0;     ///< Minimum Y coordinate (meters)
-        double max_y = 0.0;     ///< Maximum Y coordinate (meters)
+        bool valid = false; ///< Whether the bounds are valid
+        double min_x = 0.0; ///< Minimum X coordinate (meters)
+        double max_x = 0.0; ///< Maximum X coordinate (meters)
+        double min_y = 0.0; ///< Minimum Y coordinate (meters)
+        double max_y = 0.0; ///< Maximum Y coordinate (meters)
 
         /**
          * @brief Check if the bounds are valid.
@@ -94,11 +94,15 @@ namespace rsvp
          *
          * @param[in] filename An absolute filepath to the image file to be
          * opened
+         * @param[in] terrain_blending_mode The blending mode to use for
+         * compositing terrains in MOD files ("alpha" or "distance")
          *
          * @return A pointer to a newly created ImageData. This object
          * should be deleted by the caller after use.
          */
-        static std::shared_ptr<ImageData> read(const std::string &filename);
+        static std::shared_ptr<ImageData>
+        read(const std::string &filename,
+             const std::string &terrain_blending_mode = "alpha");
 
         /**
          * @brief Enable or disable interpolation for the image data.
@@ -241,11 +245,13 @@ namespace rsvp
          * coordinates.
          *
          * This method queries the underlying image data format (e.g., VICAR
-         * labels) to determine the real-world extent of the data. For composite
-         * images, this returns the union of all constituent image bounds.
+         * labels) to determine the real-world extent of the data. For
+         * composite images, this returns the union of all constituent image
+         * bounds.
          *
-         * @return TerrainBounds struct containing the spatial extent in meters,
-         * or an invalid bounds if the data does not have spatial information.
+         * @return TerrainBounds struct containing the spatial extent in
+         * meters, or an invalid bounds if the data does not have spatial
+         * information.
          */
         virtual TerrainBounds get_bounds() const
         {

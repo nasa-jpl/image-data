@@ -109,7 +109,8 @@ namespace rsvp
     }
 
     std::shared_ptr<ImageData>
-    ModData::read_modfile(const std::string &filename)
+    ModData::read_modfile(const std::string &filename,
+                          const std::string &terrain_blending_mode)
     {
         std::ifstream mod_file(filename);
 
@@ -143,11 +144,12 @@ namespace rsvp
 
         // As far as we can tell, we've got a valid mod file - so return the
         // parsing of that!
-        return parse_imagedata(&tokens, filename);
+        return parse_imagedata(&tokens, filename, terrain_blending_mode);
     }
 
     std::shared_ptr<ImageData>
-    ModData::read_bare_vicarfile(const std::string &filename)
+    ModData::read_bare_vicarfile(const std::string &filename,
+                                 const std::string &terrain_blending_mode)
     {
         std::shared_ptr<VicarData> raw_result =
             VicarData::read_vicarfile(filename);
@@ -239,12 +241,49 @@ namespace rsvp
                 }
             }
 
-            auto result = std::make_shared<AlphaBlendingCompositeData>();
+            // Create composite based on blending mode
+            std::shared_ptr<CompositeData> result;
+            if (terrain_blending_mode == "distance")
+            {
+                result = std::make_shared<DistanceWeightedCompositeData>();
+            }
+            else
+            {
+                result = std::make_shared<AlphaBlendingCompositeData>();
+            }
 
             // .mod files do not support rotations, so that parameter will
             // always be zero.
-            result->add_image(std::make_shared<TranslatedData>(
-                raw_result, x_offset, y_offset, map_scale, 0.0));
+            auto translated_terrain = std::make_shared<TranslatedData>(
+                raw_result, x_offset, y_offset, map_scale, 0.0);
+
+            // If using distance weighting, extract camera origin
+            if (terrain_blending_mode == "distance")
+            {
+                auto dist_composite =
+                    std::static_pointer_cast<DistanceWeightedCompositeData>(
+                        result);
+                double camera_c[3];
+                if (raw_result->get_camera_c(camera_c))
+                {
+                    // Camera origin is in local coordinates, transform to
+                    // world coordinates
+                    double cam_x = camera_c[0] * map_scale + x_offset;
+                    double cam_y = camera_c[1] * map_scale + y_offset;
+                    dist_composite->add_image_with_origin(
+                        translated_terrain, cam_x, cam_y);
+                }
+                else
+                {
+                    // No camera origin (shouldn't happen for VICAR, but handle
+                    // it)
+                    dist_composite->add_image(translated_terrain);
+                }
+            }
+            else
+            {
+                result->add_image(translated_terrain);
+            }
 
             result->set_alpha_band(alpha_band_to_set);
             return result;
@@ -255,7 +294,8 @@ namespace rsvp
 
     std::shared_ptr<ImageData>
     ModData::parse_imagedata(std::list<std::string> *tokens,
-                             const std::string &filename)
+                             const std::string &filename,
+                             const std::string &terrain_blending_mode)
     {
         /* Per the VSL README.MOD file:
 
@@ -301,23 +341,24 @@ namespace rsvp
 
         if (tokens->front() == "composite" || tokens->front() == "scoredmap")
         {
-            return parse_compdata(tokens, filename);
+            return parse_compdata(tokens, filename, terrain_blending_mode);
         }
         else if (tokens->front() == "transform")
         {
-            return parse_transdata(tokens, filename);
+            return parse_transdata(tokens, filename, terrain_blending_mode);
         }
         else if (tokens->front() == "file")
         {
-            return parse_filedata(tokens, filename);
+            return parse_filedata(tokens, filename, terrain_blending_mode);
         }
         else if (tokens->front() == "deinterpolate")
         {
-            return parse_deinterpolate(tokens, filename);
+            return parse_deinterpolate(
+                tokens, filename, terrain_blending_mode);
         }
         else if (tokens->front() == "zoffset")
         {
-            return parse_zoffset(tokens, filename);
+            return parse_zoffset(tokens, filename, terrain_blending_mode);
         }
         else
         {
@@ -328,7 +369,8 @@ namespace rsvp
 
     std::shared_ptr<ImageData>
     ModData::parse_zoffset(std::list<std::string> *tokens,
-                           const std::string &filename)
+                           const std::string &filename,
+                           const std::string &terrain_blending_mode)
     {
         // zoffset blocks have the form:
         //
@@ -442,8 +484,8 @@ namespace rsvp
         tokens->pop_front();
 
         // We've now extracted everything - actually allocate some memory now.
-        std::shared_ptr<ImageData> embedded =
-            ModData::parse_imagedata(&local_tokens, filename);
+        std::shared_ptr<ImageData> embedded = ModData::parse_imagedata(
+            &local_tokens, filename, terrain_blending_mode);
 
         if (embedded == nullptr)
         {
@@ -463,7 +505,8 @@ namespace rsvp
 
     std::shared_ptr<ImageData>
     ModData::parse_deinterpolate(std::list<std::string> *tokens,
-                                 const std::string &filename)
+                                 const std::string &filename,
+                                 const std::string &terrain_blending_mode)
     {
         // Deinterpolate blocks have the form:
         //
@@ -487,7 +530,8 @@ namespace rsvp
 
         tokens->pop_front();
 
-        std::shared_ptr<ImageData> result = parse_imagedata(tokens, filename);
+        std::shared_ptr<ImageData> result =
+            parse_imagedata(tokens, filename, terrain_blending_mode);
 
         if (result)
         {
@@ -499,7 +543,8 @@ namespace rsvp
 
     std::shared_ptr<ImageData>
     ModData::parse_filedata(std::list<std::string> *tokens,
-                            const std::string &filename)
+                            const std::string &filename,
+                            const std::string &terrain_blending_mode)
     {
         // Files have the form:
         //
@@ -585,7 +630,7 @@ namespace rsvp
         else
         {
             // Parse everything else in our usual manner
-            result = ImageData::read(path);
+            result = ImageData::read(path, terrain_blending_mode);
         }
 
         // Fail fast if we didn't parse the file appropriately
@@ -619,7 +664,8 @@ namespace rsvp
 
     std::shared_ptr<ImageData>
     ModData::parse_compdata(std::list<std::string> *tokens,
-                            const std::string &filename)
+                            const std::string &filename,
+                            const std::string &terrain_blending_mode)
     {
         // Composites have the form:
         //
@@ -670,21 +716,31 @@ namespace rsvp
         std::shared_ptr<CompositeData> result;
         if (composite_type == "composite")
         {
-            // Detect if this is an orbital DEM by checking if base filename starts with "O_"
+            // Detect if this is an orbital DEM by checking if base filename
+            // starts with "O_"
             size_t last_slash = filename.find_last_of("/\\");
             std::string base_filename = (last_slash != std::string::npos) ?
-                filename.substr(last_slash + 1) : filename;
+                filename.substr(last_slash + 1) :
+                filename;
             bool is_orbital = (base_filename.find("O_") == 0);
 
             if (is_orbital)
             {
                 // Use FirstValidCompositeData for orbital DEMs to avoid
-                // blending different bilinear interpolations at tile boundaries
+                // blending different bilinear interpolations at tile
+                // boundaries
                 result = std::make_shared<FirstValidCompositeData>();
+            }
+            else if (terrain_blending_mode == "distance")
+            {
+                // Use DistanceWeightedCompositeData for distance-based
+                // blending
+                result = std::make_shared<DistanceWeightedCompositeData>();
             }
             else
             {
                 // Use AlphaBlendingCompositeData for non-orbital terrains
+                // (default)
                 result = std::make_shared<AlphaBlendingCompositeData>();
             }
         }
@@ -740,8 +796,8 @@ namespace rsvp
                 }
             }
 
-            std::shared_ptr<ImageData> embedded =
-                ModData::parse_imagedata(&local_tokens, filename);
+            std::shared_ptr<ImageData> embedded = ModData::parse_imagedata(
+                &local_tokens, filename, terrain_blending_mode);
 
             if (embedded == nullptr)
             {
@@ -751,7 +807,58 @@ namespace rsvp
                     "embedded image");
             }
 
-            result->add_image(embedded);
+            // If using distance-weighted composite, try to extract camera
+            // origin
+            auto *dist_composite =
+                dynamic_cast<DistanceWeightedCompositeData *>(result.get());
+            if (dist_composite)
+            {
+                // Try to extract camera origin from nested structures
+                bool added_with_origin = false;
+
+                // Check if embedded is TranslatedData wrapping VicarData
+                auto translated =
+                    std::dynamic_pointer_cast<TranslatedData>(embedded);
+                if (translated)
+                {
+                    auto source = translated->get_source_image();
+                    auto vicar = std::dynamic_pointer_cast<VicarData>(source);
+                    if (vicar)
+                    {
+                        double camera_c[3];
+                        if (vicar->get_camera_c(camera_c))
+                        {
+                            // Get transform parameters from TranslatedData
+                            double t_x, t_y, txx, tyx, txy, tyy;
+                            translated->get_transform(
+                                t_x, t_y, txx, tyx, txy, tyy);
+
+                            // Apply affine transform to camera origin:
+                            // [X, Y] = [txx, tyx; txy, tyy] * [cx, cy] + [t_x,
+                            // t_y]
+                            double cam_x =
+                                txx * camera_c[0] + tyx * camera_c[1] + t_x;
+                            double cam_y =
+                                txy * camera_c[0] + tyy * camera_c[1] + t_y;
+
+                            dist_composite->add_image_with_origin(
+                                embedded, cam_x, cam_y);
+                            added_with_origin = true;
+                        }
+                    }
+                }
+
+                // If we couldn't extract camera origin, add without it
+                if (!added_with_origin)
+                {
+                    dist_composite->add_image(embedded);
+                }
+            }
+            else
+            {
+                // Not distance-weighted, use regular add
+                result->add_image(embedded);
+            }
         }
 
         // Try to set the alpha band appropriately for composited heightmaps
@@ -798,7 +905,8 @@ namespace rsvp
 
     std::shared_ptr<ImageData>
     ModData::parse_transdata(std::list<std::string> *tokens,
-                             const std::string &filename)
+                             const std::string &filename,
+                             const std::string &terrain_blending_mode)
     {
         // Transforms have the form:
         //
@@ -845,7 +953,7 @@ namespace rsvp
         // At this point, we've stripped off everything but the contained
         // block. For that... we go back to the start and recurse again!
         std::shared_ptr<ImageData> contents =
-            ModData::parse_imagedata(tokens, filename);
+            ModData::parse_imagedata(tokens, filename, terrain_blending_mode);
 
         // If something failed in the deeper parsing, abort
         if (contents == nullptr)
