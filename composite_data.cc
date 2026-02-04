@@ -346,7 +346,9 @@ namespace rsvp
                     return true;
                 }
                 else if (!images.at(i)->get_interpolated_pixel_double(
-                             current_alpha, x, y,
+                             current_alpha,
+                             x,
+                             y,
                              images.at(i)->get_alpha_band()))
                 {
                     // Has alpha band but no alpha at this pixel - skip
@@ -443,6 +445,174 @@ namespace rsvp
                 image->set_interpolating(enable);
             }
         }
+    }
+
+    // DistanceWeightedCompositeData implementation
+
+    double DistanceWeightedCompositeData::calculate_distance_scale(
+        const std::shared_ptr<ImageData> &img) const
+    {
+        TerrainBounds bounds = img->get_bounds();
+        if (!bounds.valid)
+        {
+            // Fallback to 10 meters if bounds not available
+            return 10.0;
+        }
+
+        // Scale proportional to terrain size
+        // At distance = scale, weight drops to 50%
+        // Use terrain size / 4 so falloff happens within terrain bounds
+        double characteristic_size =
+            std::max(bounds.get_width(), bounds.get_height());
+        return characteristic_size / 4.0;
+    }
+
+    void DistanceWeightedCompositeData::add_image_with_origin(
+        const std::shared_ptr<ImageData> &img,
+        double camera_x,
+        double camera_y)
+    {
+        // Add to base class list
+        CompositeData::add_image(img);
+
+        // Calculate and store metadata
+        TerrainMetadata metadata;
+        metadata.has_camera_origin = true;
+        metadata.camera_x = camera_x;
+        metadata.camera_y = camera_y;
+        metadata.distance_scale = calculate_distance_scale(img);
+
+        terrain_metadata_.push_back(metadata);
+    }
+
+    void DistanceWeightedCompositeData::add_image(
+        const std::shared_ptr<ImageData> &img, int pos)
+    {
+        // Add to base class list
+        CompositeData::add_image(img, pos);
+
+        // Record metadata without camera origin
+        TerrainMetadata metadata;
+        metadata.has_camera_origin = false;
+        metadata.camera_x = 0.0;
+        metadata.camera_y = 0.0;
+        metadata.distance_scale = 10.0; // Unused but set for consistency
+
+        terrain_metadata_.push_back(metadata);
+    }
+
+    bool DistanceWeightedCompositeData::get_pixel_double(double &value,
+                                                         const int x,
+                                                         const int y,
+                                                         const int b) const
+    {
+        return get_interpolated_pixel_double(
+            value, static_cast<double>(x), static_cast<double>(y), b);
+    }
+
+    bool DistanceWeightedCompositeData::get_interpolated_pixel_double(
+        double &value, const double x, const double y, const int b) const
+    {
+        // Note: When interpolation is disabled via set_interpolating(false),
+        // we still call get_interpolated_pixel_double on child images.
+        // The interpolation flag is passed through to children via
+        // TranslatedData::set_interpolating, so each child will do
+        // nearest-neighbor rounding in its own coordinate space.
+        // This is correct because child images need to transform world
+        // coordinates to their pixel coordinates before rounding.
+
+        double weighted_sum = 0.0;
+        double total_weight = 0.0;
+
+        for (int i = 0; i < get_count(); i++)
+        {
+            double current_height = 0.0;
+            double current_alpha = 0.0;
+
+            // Check the image bounds
+            if (!images.at(i)->get_interpolated_pixel_double(
+                    current_height, x, y, b))
+            {
+                // Coordinates are out of bounds of image data, so skip
+                // this image
+                continue;
+            }
+
+            // Get the alpha value
+            if (images.at(i)->get_alpha_band() < 0)
+            {
+                // No alpha band defined for image, so just call it opaque.
+                current_alpha = 255.0;
+            }
+            else if (!images.at(i)->get_interpolated_pixel_double(
+                         current_alpha, x, y, images.at(i)->get_alpha_band()))
+            {
+                // Valid data value, but no alpha value at this pixel
+                // This should not be able to happen
+                throw std::runtime_error(
+                    "Image pixel at (" + std::to_string(x) + ", " +
+                    std::to_string(y) + ") missing alpha band channel");
+            }
+
+            // Map alpha value from 1-255 range to 0-1 range
+            if (current_alpha < 1.01)
+            {
+                // If the alpha value is at the minimum, skip this layer
+                continue;
+            }
+
+            double alpha_weight;
+            if (current_alpha > 254.9)
+            {
+                // If the alpha value is at the maximum, set it to 1.0
+                alpha_weight = 1.0;
+            }
+            else
+            {
+                // Scale alpha to range 0.0 - 1.0
+                alpha_weight = static_cast<int>(current_alpha + 0.5) / 255.0;
+            }
+
+            // Calculate combined weight (alpha * distance)
+            double combined_weight;
+            if (terrain_metadata_[i].has_camera_origin)
+            {
+                // Calculate distance-based weight
+                double dx = x - terrain_metadata_[i].camera_x;
+                double dy = y - terrain_metadata_[i].camera_y;
+                double dist_sq = dx * dx + dy * dy;
+
+                double scale = terrain_metadata_[i].distance_scale;
+                double scale_sq = scale * scale;
+
+                // Quadratic falloff: weight = scale² / (dist² + scale²)
+                // At dist=0: weight=1.0
+                // At dist=scale: weight=0.5
+                // At dist=2*scale: weight=0.2
+                double dist_weight = scale_sq / (dist_sq + scale_sq);
+
+                combined_weight = alpha_weight * dist_weight;
+            }
+            else
+            {
+                // No camera origin (e.g., orbital DEM) - use only alpha
+                // weighting
+                combined_weight = alpha_weight;
+            }
+
+            weighted_sum += current_height * combined_weight;
+            total_weight += combined_weight;
+        }
+
+        // If the sum of all the weights is tiny, assume that there's pretty
+        // much no data here
+        if (total_weight < 0.00001)
+        {
+            return false;
+        }
+
+        value = weighted_sum / total_weight;
+        return true;
     }
 
 }

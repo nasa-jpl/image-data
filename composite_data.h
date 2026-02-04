@@ -14,7 +14,7 @@ namespace rsvp
     {
 
     protected:
-        std::vector<std::shared_ptr<rsvp::ImageData> > images;
+        std::vector<std::shared_ptr<rsvp::ImageData>> images;
 
     public:
         /**
@@ -77,7 +77,8 @@ namespace rsvp
         /**
          * @brief Set interpolation mode for composite and all child images.
          *
-         * @param enable true to enable bilinear interpolation, false for nearest-neighbor
+         * @param enable true to enable bilinear interpolation, false for
+         * nearest-neighbor
          */
         void set_interpolating(bool enable) override;
     };
@@ -109,11 +110,11 @@ namespace rsvp
                                       const int band) const override;
 
         // Return an interpolated pixel value as a double
-        virtual bool get_interpolated_pixel_double(
-            double &value,
-            const double x,
-            const double y,
-            const int band) const override;
+        virtual bool
+        get_interpolated_pixel_double(double &value,
+                                      const double x,
+                                      const double y,
+                                      const int band) const override;
     };
 
     /**
@@ -133,7 +134,6 @@ namespace rsvp
     class AlphaBlendingCompositeData : public CompositeData
     {
     public:
-
         // Return an exact pixel value as a double
         virtual bool get_pixel_double(double &value,
                                       const int x,
@@ -141,11 +141,11 @@ namespace rsvp
                                       const int band) const override;
 
         // Return an interpolated pixel value as a double
-        virtual bool get_interpolated_pixel_double(
-            double &value,
-            const double x,
-            const double y,
-            const int band) const override;
+        virtual bool
+        get_interpolated_pixel_double(double &value,
+                                      const double x,
+                                      const double y,
+                                      const int band) const override;
     };
 
     /**
@@ -174,11 +174,11 @@ namespace rsvp
                                       const int band) const override;
 
         // Return an interpolated pixel value as a double
-        virtual bool get_interpolated_pixel_double(
-            double &value,
-            const double x,
-            const double y,
-            const int band) const override;
+        virtual bool
+        get_interpolated_pixel_double(double &value,
+                                      const double x,
+                                      const double y,
+                                      const int band) const override;
     };
 
     /**
@@ -205,11 +205,83 @@ namespace rsvp
                                       const int band) const override;
 
         // Return an interpolated pixel value as a double
-        virtual bool get_interpolated_pixel_double(
-            double &value,
-            const double x,
-            const double y,
-            const int band) const override;
+        virtual bool
+        get_interpolated_pixel_double(double &value,
+                                      const double x,
+                                      const double y,
+                                      const int band) const override;
+    };
+
+    /**
+     * @brief A class that uses distance-weighted blending with alpha channel.
+     *
+     * This composite type weights terrain contributions based on distance from
+     * camera origin, reducing the influence of terrain data that is far from
+     * where it was captured. This addresses the issue that navcam/hazcam
+     * terrains have worse accuracy further from the camera location.
+     *
+     * Weighting combines alpha channel decay with distance-based falloff:
+     *   combined_weight = alpha_weight * distance_weight
+     *
+     * Distance weight uses quadratic falloff:
+     *   distance_weight = scale² / (distance² + scale²)
+     *
+     * For terrains without camera origin information (e.g., orbital DEMs),
+     * only alpha weighting is applied.
+     */
+    class DistanceWeightedCompositeData final : public CompositeData
+    {
+    private:
+        struct TerrainMetadata
+        {
+            bool has_camera_origin; // False for orbital DEMs, true for
+                                    // navcam/hazcam
+            double camera_x,
+                camera_y;          // Transformed camera position in root frame
+            double distance_scale; // Per-terrain scale for falloff
+        };
+        std::vector<TerrainMetadata> terrain_metadata_;
+
+        double
+        calculate_distance_scale(const std::shared_ptr<ImageData> &img) const;
+
+    public:
+        /**
+         * @brief Add an image with camera origin information.
+         *
+         * @param img The ImageData to add to the composite
+         * @param camera_x The X coordinate of the camera origin (in root
+         * frame)
+         * @param camera_y The Y coordinate of the camera origin (in root
+         * frame)
+         */
+        void add_image_with_origin(const std::shared_ptr<ImageData> &img,
+                                   double camera_x,
+                                   double camera_y);
+
+        /**
+         * @brief Add an image without camera origin (e.g., orbital DEM).
+         *
+         * Overloaded method that delegates to base class add_image, then
+         * records metadata indicating no camera origin.
+         *
+         * @param img The ImageData to add to the composite
+         * @param pos The index at which to add the data (-1 for end)
+         */
+        void add_image(const std::shared_ptr<ImageData> &img, int pos = -1);
+
+        // Return an exact pixel value as a double
+        virtual bool get_pixel_double(double &value,
+                                      const int x,
+                                      const int y,
+                                      const int band) const override;
+
+        // Return an interpolated pixel value as a double
+        virtual bool
+        get_interpolated_pixel_double(double &value,
+                                      const double x,
+                                      const double y,
+                                      const int band) const override;
     };
 }
 
