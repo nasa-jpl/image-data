@@ -22,7 +22,8 @@ namespace rsvp
 
     std::shared_ptr<ImageData>
     ImageData::read(const std::string &filename,
-                    const std::string &terrain_blending_mode)
+                    TerrainBlendingMode terrain_blending_mode,
+                    const DistanceWeightingParams &distance_params)
     {
         std::shared_ptr<ImageData> return_value;
         std::string extension =
@@ -30,8 +31,8 @@ namespace rsvp
         if (extension == "mod" || extension == "MOD" ||
             extension == "mod_tc" || extension == "MOD_TC")
         {
-            return_value =
-                ModData::read_modfile(filename, terrain_blending_mode);
+            return_value = ModData::read_modfile(filename, terrain_blending_mode,
+                                                 distance_params);
         }
         else if (extension == "img" || extension == "IMG" ||
                  extension == "vic" || extension == "VIC")
@@ -41,8 +42,8 @@ namespace rsvp
         else if (extension == "ht" || extension == "HT" || extension == "tc" ||
                  extension == "TC")
         {
-            return_value =
-                ModData::read_bare_vicarfile(filename, terrain_blending_mode);
+            return_value = ModData::read_bare_vicarfile(
+                filename, terrain_blending_mode, distance_params);
         }
         else if (extension == "csv" || extension == "CSV")
         {

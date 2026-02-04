@@ -813,7 +813,9 @@ public:
     }
 };
 
-// Test DistanceWeightedCompositeData - basic distance weighting
+// Test DistanceWeightedCompositeData - behavior with non-VICAR images
+// Non-VICAR images (like DistanceTestImage) have distance weighting disabled
+// since they're not from stereo cameras (NAVCAM/FHAZ/RHAZ)
 TEST(composite_data, distance_weighted_basic)
 {
     rsvp::DistanceWeightedCompositeData composite;
@@ -830,24 +832,19 @@ TEST(composite_data, distance_weighted_basic)
 
     double height;
 
-    // At camera1 origin (0,0), should favor terrain1
+    // Non-VICAR images have distance weighting disabled (range_error_coefficient=0)
+    // Both terrains have equal alpha, so result is always the average: 15.0
     EXPECT_TRUE(composite.get_interpolated_pixel_double(height, 0.0, 0.0, 1));
-    EXPECT_LT(height, 15.0)
-        << "At camera 1 origin, should favor terrain 1 (height=10)";
-    EXPECT_GT(height, 8.0)
-        << "Height should be closer to terrain 1 than terrain 2";
+    EXPECT_NEAR(height, 15.0, 0.1)
+        << "Non-VICAR images: distance weighting disabled, always get average";
 
-    // At camera2 origin (10,0), should favor terrain2
     EXPECT_TRUE(composite.get_interpolated_pixel_double(height, 10.0, 0.0, 1));
-    EXPECT_GT(height, 15.0)
-        << "At camera 2 origin, should favor terrain 2 (height=20)";
-    EXPECT_LT(height, 22.0)
-        << "Height should be closer to terrain 2 than terrain 1";
+    EXPECT_NEAR(height, 15.0, 0.1)
+        << "Non-VICAR images: distance weighting disabled, always get average";
 
-    // At midpoint (5, 0) - should blend roughly equally
     EXPECT_TRUE(composite.get_interpolated_pixel_double(height, 5.0, 0.0, 1));
-    EXPECT_NEAR(height, 15.0, 2.0)
-        << "At midpoint, should blend both terrains roughly equally";
+    EXPECT_NEAR(height, 15.0, 0.1)
+        << "Non-VICAR images: distance weighting disabled, always get average";
 }
 
 // Test DistanceWeightedCompositeData - alpha multiplication
@@ -870,14 +867,15 @@ TEST(composite_data, distance_weighted_alpha_mult)
     // Query at (0, 0) - near camera 1 but with low alpha vs far from camera 2
     // but with high alpha
     EXPECT_TRUE(composite.get_interpolated_pixel_double(height, 0.0, 0.0, 1));
-    // Low alpha near should still dominate due to distance advantage
-    EXPECT_LT(height, 15.0)
-        << "Low alpha near terrain should outweigh high alpha far terrain";
+    // Non-VICAR images have distance weighting disabled (range_error_coefficient=0).
+    // Result is purely alpha-based: (10*0.39 + 20*1.0)/(0.39+1.0) ≈ 17.2
+    EXPECT_GT(height, 15.0) << "High alpha far terrain outweighs low alpha near";
+    EXPECT_LT(height, 19.0) << "But low alpha terrain still contributes";
 
     // Query at (10, 0) - midpoint between cameras
     EXPECT_TRUE(composite.get_interpolated_pixel_double(height, 10.0, 0.0, 1));
-    // High alpha terrain should have more influence here
-    EXPECT_GT(height, 12.0) << "High alpha should have more weight";
+    // High alpha terrain should have more influence
+    EXPECT_GT(height, 16.0) << "High alpha should dominate";
 }
 
 // Test DistanceWeightedCompositeData - quadratic falloff
@@ -1001,29 +999,29 @@ TEST(composite_data, distance_weighted_two_terrain_falloff)
 
     double height;
 
-    // At (0, 0): distance to camera1 = 0, distance to camera2 = 20
-    // weight1 = 1.0, weight2 ≈ 0 (25/(400+25) ≈ 0.059)
+    // Non-VICAR images (DistanceTestImage) have distance weighting disabled
+    // (range_error_coefficient=0). Both terrains have equal alpha (255), so
+    // dist_weight=1.0 for both regardless of distance. Result is the average
+    // of the two terrain heights: (0 + 100) / 2 = 50
+
+    // At (0, 0): near camera1, but distance weighting disabled
     EXPECT_TRUE(composite.get_interpolated_pixel_double(height, 0.0, 0.0, 1));
-    EXPECT_LT(height, 15.0) << "Near camera 1, should favor terrain1 height";
-
-    // At (20, 0): distance to camera1 = 20, distance to camera2 = 0
-    // weight1 ≈ 0, weight2 = 1.0
-    EXPECT_TRUE(composite.get_interpolated_pixel_double(height, 20.0, 0.0, 1));
-    EXPECT_GT(height, 85.0) << "Near camera 2, should favor terrain2 height";
-
-    // At (10, 0): distance to both cameras = 10
-    // With scale=5, weight = 25/(100+25) = 0.2 for each
-    // Since weights are equal, should get average
-    EXPECT_TRUE(composite.get_interpolated_pixel_double(height, 10.0, 0.0, 1));
     EXPECT_NEAR(height, 50.0, 5.0)
-        << "Equidistant from both cameras should give average";
+        << "Non-VICAR images: distance weighting disabled, terrains blend equally";
 
-    // At (5, 0): distance to camera1 = 5 (scale), distance to camera2 = 15
-    // weight1 = 25/(25+25) = 0.5, weight2 = 25/(225+25) = 0.1
-    // weighted avg = (0*0.5 + 100*0.1)/(0.5+0.1) = 10/0.6 ≈ 16.7
+    // At (20, 0): near camera2, but distance weighting disabled
+    EXPECT_TRUE(composite.get_interpolated_pixel_double(height, 20.0, 0.0, 1));
+    EXPECT_NEAR(height, 50.0, 5.0)
+        << "Non-VICAR images: distance weighting disabled, terrains blend equally";
+
+    // At (10, 0): midpoint - equal distance to both cameras
+    EXPECT_TRUE(composite.get_interpolated_pixel_double(height, 10.0, 0.0, 1));
+    EXPECT_NEAR(height, 50.0, 5.0) << "Should get average height";
+
+    // At (5, 0): closer to camera1
     EXPECT_TRUE(composite.get_interpolated_pixel_double(height, 5.0, 0.0, 1));
-    EXPECT_LT(height, 30.0) << "Closer to camera1 should favor terrain1";
-    EXPECT_GT(height, 10.0) << "But terrain2 should still have some influence";
+    EXPECT_NEAR(height, 50.0, 5.0)
+        << "Non-VICAR images: distance weighting disabled, terrains blend equally";
 }
 
 // Test DistanceWeightedCompositeData - fallback scale with invalid bounds

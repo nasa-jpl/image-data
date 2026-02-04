@@ -70,6 +70,43 @@ namespace rsvp
     };
 
     /**
+     * @brief Terrain blending mode for compositing overlapping terrain data.
+     */
+    enum class TerrainBlendingMode
+    {
+        Alpha,    ///< Use alpha channel only for blending
+        Distance  ///< Weight by distance from camera origin
+    };
+
+    /**
+     * @brief Parameters for distance-weighted terrain blending.
+     *
+     * These parameters control how terrain contributions are weighted based on
+     * distance from camera origin, accounting for range uncertainty in stereo
+     * reconstruction.
+     */
+    struct DistanceWeightingParams
+    {
+        /**
+         * @brief Minimum weight for distance-based blending.
+         *
+         * This floor value ensures all valid terrain data contributes to the
+         * blend, even at large distances where range error is high.
+         * Range: [0.0, 1.0], default: 0.1 (10% weight)
+         */
+        double minimum_range_weight = 0.1;
+
+        /**
+         * @brief Range error threshold for weight falloff (meters).
+         *
+         * Distance at which the weight drops from 1.0 to minimum_range_weight.
+         * Weight follows linear falloff: weight = max(1.0 - DZ/threshold, min)
+         * Default: 1.0 meter
+         */
+        double range_error_threshold_meters = 1.0;
+    };
+
+    /**
      * @brief A class to read and store image data.
      * formats.
      *
@@ -95,14 +132,17 @@ namespace rsvp
          * @param[in] filename An absolute filepath to the image file to be
          * opened
          * @param[in] terrain_blending_mode The blending mode to use for
-         * compositing terrains in MOD files ("alpha" or "distance")
+         * compositing terrains in MOD files
+         * @param[in] distance_params Parameters for distance-weighted blending
          *
          * @return A pointer to a newly created ImageData. This object
          * should be deleted by the caller after use.
          */
         static std::shared_ptr<ImageData>
         read(const std::string &filename,
-             const std::string &terrain_blending_mode = "alpha");
+             TerrainBlendingMode terrain_blending_mode =
+                 TerrainBlendingMode::Alpha,
+             const DistanceWeightingParams &distance_params = {});
 
         /**
          * @brief Enable or disable interpolation for the image data.

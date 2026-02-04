@@ -953,6 +953,120 @@ namespace rsvp
             extract_vector(raw_value, camera_e);
     }
 
+    std::string VicarData::get_camera_type() const
+    {
+        // Extract filename from filepath
+        std::string filename;
+        size_t last_slash = filepath.find_last_of("/\\");
+        if (last_slash != std::string::npos)
+        {
+            filename = filepath.substr(last_slash + 1);
+        }
+        else
+        {
+            filename = filepath;
+        }
+
+        if (filename.empty())
+        {
+            return "UNKNOWN";
+        }
+
+        // Check first character only
+        char first = filename[0];
+        if (first == 'N' || first == 'n')
+        {
+            return "NAVCAM";
+        }
+        if (first == 'F' || first == 'f')
+        {
+            return "FHAZ";
+        }
+        if (first == 'R' || first == 'r')
+        {
+            return "RHAZ";
+        }
+
+        // Try VICAR label as fallback
+        std::string instrument_id;
+        if (get_label_property("IDENTIFICATION", "INSTRUMENT_ID", instrument_id))
+        {
+            if (instrument_id.find("NAV") != std::string::npos)
+            {
+                return "NAVCAM";
+            }
+            if (instrument_id.find("FRONT_HAZ") != std::string::npos)
+            {
+                return "FHAZ";
+            }
+            if (instrument_id.find("REAR_HAZ") != std::string::npos)
+            {
+                return "RHAZ";
+            }
+        }
+
+        return "UNKNOWN";
+    }
+
+    double VicarData::get_stereo_baseline() const
+    {
+        std::string cam_type = get_camera_type();
+
+        // M2020 hardware specifications
+        if (cam_type == "NAVCAM")
+        {
+            return 0.42; // 42 cm
+        }
+        if (cam_type == "FHAZ")
+        {
+            return 0.248; // 24.8 cm
+        }
+        if (cam_type == "RHAZ")
+        {
+            return 0.934; // 93.4 cm
+        }
+
+        // For orbital DEMs or unknown cameras, use large baseline
+        // (large B → small DZ → high weight → minimal distance falloff)
+        return 10.0;
+    }
+
+    double VicarData::get_pixel_fov_radians() const
+    {
+        // Try to compute from CAHV V vector if available
+        double camera_v[3];
+        int nl = get_height(); // Image height in pixels
+
+        if (get_camera_v(camera_v) && nl > 0)
+        {
+            double v_mag = sqrt(camera_v[0] * camera_v[0] +
+                                camera_v[1] * camera_v[1] +
+                                camera_v[2] * camera_v[2]);
+            // Dy = ||V|| / image_height (approximate for CAHV)
+            return v_mag / nl;
+        }
+
+        // Fallback: Use camera-specific default FOV
+        std::string cam_type = get_camera_type();
+        int height = (nl > 0) ? nl : 1024; // Default to 1024 if unknown
+
+        if (cam_type == "NAVCAM")
+        {
+            // 73° vertical FOV
+            double fov_radians = 73.0 * M_PI / 180.0;
+            return fov_radians / height;
+        }
+        else if (cam_type == "FHAZ" || cam_type == "RHAZ")
+        {
+            // 102° vertical FOV for hazcams
+            double fov_radians = 102.0 * M_PI / 180.0;
+            return fov_radians / height;
+        }
+
+        // Conservative default for unknown cameras
+        return 0.001; // ~0.057 degrees per pixel
+    }
+
     TerrainBounds VicarData::get_bounds() const
     {
         TerrainBounds bounds;

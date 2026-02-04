@@ -547,6 +547,10 @@ namespace rsvp
         bool get_camera_o(double camera_o[3]) const;
         bool get_camera_r(double camera_r[3]) const;
         bool get_camera_e(double camera_e[3]) const;
+
+        std::string get_camera_type() const;
+        double get_stereo_baseline() const;
+        double get_pixel_fov_radians() const;
     };
 }
 

@@ -1,5 +1,8 @@
 #include "composite_data.h"
 
+#include "vicar_data.h"
+
+#include <cmath>
 #include <stdexcept>
 
 #include <limits>
@@ -449,22 +452,41 @@ namespace rsvp
 
     // DistanceWeightedCompositeData implementation
 
-    double DistanceWeightedCompositeData::calculate_distance_scale(
-        const std::shared_ptr<ImageData> &img) const
+    DistanceWeightedCompositeData::DistanceWeightedCompositeData(
+        const DistanceWeightingParams &params) :
+        minimum_range_weight_(params.minimum_range_weight),
+        range_error_threshold_meters_(params.range_error_threshold_meters)
     {
-        TerrainBounds bounds = img->get_bounds();
-        if (!bounds.valid)
+    }
+
+    void DistanceWeightedCompositeData::extract_camera_parameters(
+        const std::shared_ptr<ImageData> &img,
+        TerrainMetadata &metadata) const
+    {
+        // Try to get VicarData
+        auto vicar = std::dynamic_pointer_cast<VicarData>(img);
+
+        // Only apply distance weighting for supported stereo camera types
+        if (vicar)
         {
-            // Fallback to 10 meters if bounds not available
-            return 10.0;
+            std::string cam_type = vicar->get_camera_type();
+            if (cam_type == "NAVCAM" || cam_type == "FHAZ" || cam_type == "RHAZ")
+            {
+                // Precompute range error coefficient: (r * Dy) / B
+                // where r = subpixel resolution, Dy = pixel FOV, B = baseline
+                double subpixel_res = 1.0 / 3.0; // Fixed: 1/3 pixel
+                double baseline = vicar->get_stereo_baseline();
+                double pixel_fov = vicar->get_pixel_fov_radians();
+
+                // Precompute coefficient to avoid repeated computation in hot path
+                metadata.range_error_coefficient = (subpixel_res * pixel_fov) / baseline;
+                return;
+            }
         }
 
-        // Scale proportional to terrain size
-        // At distance = scale, weight drops to 50%
-        // Use terrain size / 4 so falloff happens within terrain bounds
-        double characteristic_size =
-            std::max(bounds.get_width(), bounds.get_height());
-        return characteristic_size / 4.0;
+        // For non-VICAR terrain (orbital DEMs) or unsupported camera types
+        // (ZCAM, WATSON, etc.), disable distance weighting entirely
+        metadata.range_error_coefficient = 0.0;
     }
 
     void DistanceWeightedCompositeData::add_image_with_origin(
@@ -480,7 +502,7 @@ namespace rsvp
         metadata.has_camera_origin = true;
         metadata.camera_x = camera_x;
         metadata.camera_y = camera_y;
-        metadata.distance_scale = calculate_distance_scale(img);
+        extract_camera_parameters(img, metadata);
 
         terrain_metadata_.push_back(metadata);
     }
@@ -492,11 +514,12 @@ namespace rsvp
         CompositeData::add_image(img, pos);
 
         // Record metadata without camera origin
+        // Skip parameter extraction since distance weighting won't be used
         TerrainMetadata metadata;
         metadata.has_camera_origin = false;
         metadata.camera_x = 0.0;
         metadata.camera_y = 0.0;
-        metadata.distance_scale = 10.0; // Unused but set for consistency
+        metadata.range_error_coefficient = 0.0; // Unused
 
         terrain_metadata_.push_back(metadata);
     }
@@ -577,19 +600,23 @@ namespace rsvp
             double combined_weight;
             if (terrain_metadata_[i].has_camera_origin)
             {
-                // Calculate distance-based weight
+                // Calculate distance squared from camera
                 double dx = x - terrain_metadata_[i].camera_x;
                 double dy = y - terrain_metadata_[i].camera_y;
                 double dist_sq = dx * dx + dy * dy;
 
-                double scale = terrain_metadata_[i].distance_scale;
-                double scale_sq = scale * scale;
+                // Calculate range error using precomputed coefficient
+                // DZ = dist_sq * coefficient, where coefficient = (r * Dy) / B
+                double DZ = dist_sq * terrain_metadata_[i].range_error_coefficient;
 
-                // Quadratic falloff: weight = scale² / (dist² + scale²)
-                // At dist=0: weight=1.0
-                // At dist=scale: weight=0.5
-                // At dist=2*scale: weight=0.2
-                double dist_weight = scale_sq / (dist_sq + scale_sq);
+                // Weight based on range uncertainty with linear falloff
+                // weight = max(1.0 - DZ/threshold, min_weight)
+                // At DZ=0: weight = 1.0 (perfect accuracy)
+                // At DZ=threshold: weight = min_weight
+                // At DZ>threshold: weight = min_weight (clamped)
+                double dist_weight =
+                    std::max(1.0 - DZ / range_error_threshold_meters_,
+                            minimum_range_weight_);
 
                 combined_weight = alpha_weight * dist_weight;
             }

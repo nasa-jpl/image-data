@@ -237,15 +237,28 @@ namespace rsvp
             bool has_camera_origin; // False for orbital DEMs, true for
                                     // navcam/hazcam
             double camera_x,
-                camera_y;          // Transformed camera position in root frame
-            double distance_scale; // Per-terrain scale for falloff
+                camera_y;                   // Transformed camera position in root frame
+            double range_error_coefficient; // Precomputed: (r * Dy) / B
         };
         std::vector<TerrainMetadata> terrain_metadata_;
 
-        double
-        calculate_distance_scale(const std::shared_ptr<ImageData> &img) const;
+        // Distance weighting parameters
+        double minimum_range_weight_;
+        double range_error_threshold_meters_;
+
+        void
+        extract_camera_parameters(const std::shared_ptr<ImageData> &img,
+                                  TerrainMetadata &metadata) const;
 
     public:
+        /**
+         * @brief Construct with custom distance weighting parameters.
+         *
+         * @param params Distance weighting parameters
+         */
+        explicit DistanceWeightedCompositeData(
+            const DistanceWeightingParams &params = {});
+
         /**
          * @brief Add an image with camera origin information.
          *

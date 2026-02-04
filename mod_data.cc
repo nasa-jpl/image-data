@@ -110,7 +110,8 @@ namespace rsvp
 
     std::shared_ptr<ImageData>
     ModData::read_modfile(const std::string &filename,
-                          const std::string &terrain_blending_mode)
+                          TerrainBlendingMode terrain_blending_mode,
+                          const DistanceWeightingParams &distance_params)
     {
         std::ifstream mod_file(filename);
 
@@ -144,12 +145,14 @@ namespace rsvp
 
         // As far as we can tell, we've got a valid mod file - so return the
         // parsing of that!
-        return parse_imagedata(&tokens, filename, terrain_blending_mode);
+        return parse_imagedata(&tokens, filename, terrain_blending_mode,
+                              distance_params);
     }
 
     std::shared_ptr<ImageData>
     ModData::read_bare_vicarfile(const std::string &filename,
-                                 const std::string &terrain_blending_mode)
+                                 TerrainBlendingMode terrain_blending_mode,
+                                 const DistanceWeightingParams &distance_params)
     {
         std::shared_ptr<VicarData> raw_result =
             VicarData::read_vicarfile(filename);
@@ -243,9 +246,10 @@ namespace rsvp
 
             // Create composite based on blending mode
             std::shared_ptr<CompositeData> result;
-            if (terrain_blending_mode == "distance")
+            if (terrain_blending_mode == TerrainBlendingMode::Distance)
             {
-                result = std::make_shared<DistanceWeightedCompositeData>();
+                result = std::make_shared<DistanceWeightedCompositeData>(
+                    distance_params);
             }
             else
             {
@@ -258,7 +262,7 @@ namespace rsvp
                 raw_result, x_offset, y_offset, map_scale, 0.0);
 
             // If using distance weighting, extract camera origin
-            if (terrain_blending_mode == "distance")
+            if (terrain_blending_mode == TerrainBlendingMode::Distance)
             {
                 auto dist_composite =
                     std::static_pointer_cast<DistanceWeightedCompositeData>(
@@ -295,7 +299,8 @@ namespace rsvp
     std::shared_ptr<ImageData>
     ModData::parse_imagedata(std::list<std::string> *tokens,
                              const std::string &filename,
-                             const std::string &terrain_blending_mode)
+                             TerrainBlendingMode terrain_blending_mode,
+                             const DistanceWeightingParams &distance_params)
     {
         /* Per the VSL README.MOD file:
 
@@ -341,24 +346,28 @@ namespace rsvp
 
         if (tokens->front() == "composite" || tokens->front() == "scoredmap")
         {
-            return parse_compdata(tokens, filename, terrain_blending_mode);
+            return parse_compdata(tokens, filename, terrain_blending_mode,
+                                distance_params);
         }
         else if (tokens->front() == "transform")
         {
-            return parse_transdata(tokens, filename, terrain_blending_mode);
+            return parse_transdata(tokens, filename, terrain_blending_mode,
+                                  distance_params);
         }
         else if (tokens->front() == "file")
         {
-            return parse_filedata(tokens, filename, terrain_blending_mode);
+            return parse_filedata(tokens, filename, terrain_blending_mode,
+                                distance_params);
         }
         else if (tokens->front() == "deinterpolate")
         {
-            return parse_deinterpolate(
-                tokens, filename, terrain_blending_mode);
+            return parse_deinterpolate(tokens, filename, terrain_blending_mode,
+                                      distance_params);
         }
         else if (tokens->front() == "zoffset")
         {
-            return parse_zoffset(tokens, filename, terrain_blending_mode);
+            return parse_zoffset(tokens, filename, terrain_blending_mode,
+                               distance_params);
         }
         else
         {
@@ -370,7 +379,8 @@ namespace rsvp
     std::shared_ptr<ImageData>
     ModData::parse_zoffset(std::list<std::string> *tokens,
                            const std::string &filename,
-                           const std::string &terrain_blending_mode)
+                           TerrainBlendingMode terrain_blending_mode,
+                           const DistanceWeightingParams &distance_params)
     {
         // zoffset blocks have the form:
         //
@@ -485,7 +495,7 @@ namespace rsvp
 
         // We've now extracted everything - actually allocate some memory now.
         std::shared_ptr<ImageData> embedded = ModData::parse_imagedata(
-            &local_tokens, filename, terrain_blending_mode);
+            &local_tokens, filename, terrain_blending_mode, distance_params);
 
         if (embedded == nullptr)
         {
@@ -506,7 +516,8 @@ namespace rsvp
     std::shared_ptr<ImageData>
     ModData::parse_deinterpolate(std::list<std::string> *tokens,
                                  const std::string &filename,
-                                 const std::string &terrain_blending_mode)
+                                 TerrainBlendingMode terrain_blending_mode,
+                                 const DistanceWeightingParams &distance_params)
     {
         // Deinterpolate blocks have the form:
         //
@@ -531,7 +542,8 @@ namespace rsvp
         tokens->pop_front();
 
         std::shared_ptr<ImageData> result =
-            parse_imagedata(tokens, filename, terrain_blending_mode);
+            parse_imagedata(tokens, filename, terrain_blending_mode,
+                          distance_params);
 
         if (result)
         {
@@ -544,8 +556,13 @@ namespace rsvp
     std::shared_ptr<ImageData>
     ModData::parse_filedata(std::list<std::string> *tokens,
                             const std::string &filename,
-                            const std::string &terrain_blending_mode)
+                            TerrainBlendingMode terrain_blending_mode,
+                            const DistanceWeightingParams &distance_params)
     {
+        // Suppress unused parameter warning - parse_filedata doesn't create
+        // CompositeData
+        (void)distance_params;
+
         // Files have the form:
         //
         //     { file filespec [ parameters ] }
@@ -665,7 +682,8 @@ namespace rsvp
     std::shared_ptr<ImageData>
     ModData::parse_compdata(std::list<std::string> *tokens,
                             const std::string &filename,
-                            const std::string &terrain_blending_mode)
+                            TerrainBlendingMode terrain_blending_mode,
+                            const DistanceWeightingParams &distance_params)
     {
         // Composites have the form:
         //
@@ -731,11 +749,12 @@ namespace rsvp
                 // boundaries
                 result = std::make_shared<FirstValidCompositeData>();
             }
-            else if (terrain_blending_mode == "distance")
+            else if (terrain_blending_mode == TerrainBlendingMode::Distance)
             {
                 // Use DistanceWeightedCompositeData for distance-based
                 // blending
-                result = std::make_shared<DistanceWeightedCompositeData>();
+                result = std::make_shared<DistanceWeightedCompositeData>(
+                    distance_params);
             }
             else
             {
@@ -797,7 +816,7 @@ namespace rsvp
             }
 
             std::shared_ptr<ImageData> embedded = ModData::parse_imagedata(
-                &local_tokens, filename, terrain_blending_mode);
+                &local_tokens, filename, terrain_blending_mode, distance_params);
 
             if (embedded == nullptr)
             {
@@ -906,7 +925,8 @@ namespace rsvp
     std::shared_ptr<ImageData>
     ModData::parse_transdata(std::list<std::string> *tokens,
                              const std::string &filename,
-                             const std::string &terrain_blending_mode)
+                             TerrainBlendingMode terrain_blending_mode,
+                             const DistanceWeightingParams &distance_params)
     {
         // Transforms have the form:
         //
@@ -953,7 +973,8 @@ namespace rsvp
         // At this point, we've stripped off everything but the contained
         // block. For that... we go back to the start and recurse again!
         std::shared_ptr<ImageData> contents =
-            ModData::parse_imagedata(tokens, filename, terrain_blending_mode);
+            ModData::parse_imagedata(tokens, filename, terrain_blending_mode,
+                                    distance_params);
 
         // If something failed in the deeper parsing, abort
         if (contents == nullptr)
