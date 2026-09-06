@@ -254,6 +254,26 @@ namespace rsvp
         }
 
         /**
+         * @brief Get the distance from a point to the edge of the image.
+         *
+         * The distance is measured in this image's own pixel units, from the
+         * continuous pixel coordinate (x, y) to the boundary of the region in
+         * which bilinear interpolation succeeds, i.e. [0, width - 1) x
+         * [0, height - 1). Points outside that region return 0.
+         *
+         * Compositors use this to feather (ramp down) an image's weight near
+         * its border so that overlapping images blend without a visible seam.
+         *
+         * @param[in] x The "x-like" coordinate of the point of interest
+         * @param[in] y The "y-like" coordinate of the point of interest
+         *
+         * @return The distance in pixels, or +infinity if the image size is
+         * unknown (width or height is 0), in which case no feathering is
+         * applied.
+         */
+        virtual double get_edge_distance(double x, double y) const;
+
+        /**
          * Get the raw pixel data for this image
          * @param color the encoding of output data:
          *          - BAYER  (RGGB)

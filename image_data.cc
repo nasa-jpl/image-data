@@ -7,7 +7,9 @@
 
 #include <stdexcept>
 
+#include <algorithm>
 #include <cmath>
+#include <limits>
 
 namespace rsvp
 {
@@ -200,6 +202,22 @@ namespace rsvp
     int ImageData::get_interpolating() const
     {
         return interpolate;
+    }
+
+    double ImageData::get_edge_distance(const double x, const double y) const
+    {
+        const int width = get_width();
+        const int height = get_height();
+        if (width <= 0 || height <= 0)
+        {
+            // Unknown size - never feather
+            return std::numeric_limits<double>::infinity();
+        }
+
+        const double distance = std::min(std::min(x, y),
+                                         std::min((width - 1) - x,
+                                                  (height - 1) - y));
+        return std::max(0.0, distance);
     }
 
     void ImageData::set_alpha_band(int band)

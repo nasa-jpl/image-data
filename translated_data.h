@@ -178,6 +178,12 @@ namespace rsvp
         }
 
         TerrainBounds get_bounds() const override;
+
+        /**
+         * @brief Get the distance from a world-coordinate point to the edge of
+         * the transformed image, in the transformed image's pixel units.
+         */
+        double get_edge_distance(double x, double y) const override;
     };
 }
 

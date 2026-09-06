@@ -670,23 +670,7 @@ namespace rsvp
         std::shared_ptr<CompositeData> result;
         if (composite_type == "composite")
         {
-            // Detect if this is an orbital DEM by checking if base filename starts with "O_"
-            size_t last_slash = filename.find_last_of("/\\");
-            std::string base_filename = (last_slash != std::string::npos) ?
-                filename.substr(last_slash + 1) : filename;
-            bool is_orbital = (base_filename.find("O_") == 0);
-
-            if (is_orbital)
-            {
-                // Use FirstValidCompositeData for orbital DEMs to avoid
-                // blending different bilinear interpolations at tile boundaries
-                result = std::make_shared<FirstValidCompositeData>();
-            }
-            else
-            {
-                // Use AlphaBlendingCompositeData for non-orbital terrains
-                result = std::make_shared<AlphaBlendingCompositeData>();
-            }
+            result = std::make_shared<AlphaBlendingCompositeData>();
         }
         else
         {

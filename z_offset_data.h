@@ -96,6 +96,11 @@ namespace rsvp
         {
             return img ? img->get_width() : 0;
         }
+
+        double get_edge_distance(double x, double y) const override
+        {
+            return img ? img->get_edge_distance(x, y) : 0.0;
+        }
     };
 }
 

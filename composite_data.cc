@@ -2,6 +2,8 @@
 
 #include <stdexcept>
 
+#include <algorithm>
+#include <cmath>
 #include <limits>
 #include <list>
 
@@ -187,21 +189,23 @@ namespace rsvp
         // This is correct because child images need to transform world
         // coordinates to their pixel coordinates before rounding.
 
-        double total_alpha = 0.0;
-        value = 0.0;
+        double summed_weight = 0.0;
+        double summed_weighted_height = 0.0;
 
         for (int i = 0; i < get_count(); i++)
         {
+            const auto &image = images.at(i);
+
             double current_height = 0.0;
             double current_alpha = 0.0;
 
-            if (images.at(i)->get_bands() == 1)
+            if (image->get_bands() == 1)
             {
                 // Usually we composite `VicarData` images, which have three
                 // bands (raw, interpolated, alpha), but we also want to
                 // support using `PGMData` images (one raw band). Switch the
                 // user-requested band for band 0.
-                if (!images.at(i)->get_interpolated_pixel_double(
+                if (!image->get_interpolated_pixel_double(
                         current_height, x, y, 0))
                 {
                     continue;
@@ -213,11 +217,8 @@ namespace rsvp
             }
             else
             {
-                // Otherwise, we're not doing the `PGMData` hackery, and should
-                // do the expected thing.
-
                 // Check the image bounds
-                if (!images.at(i)->get_interpolated_pixel_double(
+                if (!image->get_interpolated_pixel_double(
                         current_height, x, y, b))
                 {
                     // Coordinates are out of bounds of image data, so skip
@@ -226,16 +227,13 @@ namespace rsvp
                 }
 
                 // Get the alpha value
-                if (images.at(i)->get_alpha_band() < 0)
+                if (image->get_alpha_band() < 0)
                 {
                     // No alpha band defined for image, so just call it opaque.
                     current_alpha = 255.0;
                 }
-                else if (!images.at(i)->get_interpolated_pixel_double(
-                             current_alpha,
-                             x,
-                             y,
-                             images.at(i)->get_alpha_band()))
+                else if (!image->get_interpolated_pixel_double(
+                             current_alpha, x, y, image->get_alpha_band()))
                 {
                     // Valid data value, but no alpha value at this pixel
                     // This should not be able to happen
@@ -245,125 +243,58 @@ namespace rsvp
                 }
             }
 
-            // Remap the alpha value from the 1-255 range from the image into a
-            // 0-1 range.
             if (current_alpha < 1.01)
             {
-                // If the alpha value is at the minimum, skip this layer
+                // An alpha value at the minimum means no data; skip this layer
                 continue;
             }
-            else if (current_alpha > 254.9)
+
+            // Alpha confidence: continuous from 0.0 (alpha 1) to 1.0 (alpha
+            // 255). A continuous mapping is essential - the alpha band is
+            // bilinearly interpolated, so any step in this function would
+            // show up as a step in the composited surface.
+            const double normalized_alpha =
+                std::min(1.0, (current_alpha - 1.0) / 254.0);
+            const double confidence =
+                std::pow(normalized_alpha, kAlphaConfidenceExponent);
+
+            // Border feather: ramp the weight down to zero at the child's
+            // image rectangle, where the alpha band cannot warn us that the
+            // data is about to end.
+            double feather = 1.0;
+            if (feather_width > 0.0)
             {
-                // If the alpha value is at the maximum, set it to 1.0
-                current_alpha = 1.0;
-            }
-            else
-            {
-                // Otherwise, scale alpha between 0 and 1, and then divide it
-                // by 1000. This division will have no effect if all layers are
-                // extrapolated, but it will heavily weight older opaque data
-                // over newer transparent data.
-                current_alpha = static_cast<int>(current_alpha + 0.5) /
-                    255.0; // Scale alpha to range 0.0 - 1.0
-                current_alpha = current_alpha / 1000.0;
+                feather = std::min(
+                    1.0, image->get_edge_distance(x, y) / feather_width);
             }
 
-            value =
-                (current_height *
-                     current_alpha + // Contribution from current layer
-                 value * total_alpha *
-                     (1.0 -
-                      current_alpha) // Contribution from all previous layers
-                 ) /
-                (total_alpha * (1.0 - current_alpha) +
-                 current_alpha // New overall alpha value
-                );
+            // Floor the weight so that a child with data never contributes
+            // exactly zero; a point covered by a single child then returns
+            // that child's value even on the child's border.
+            const double weight = std::max(confidence * feather, 1e-12);
 
-            // Assign new overall alpha value
-            total_alpha = total_alpha * (1.0 - current_alpha) + current_alpha;
+            summed_weight += weight;
+            summed_weighted_height += weight * current_height;
         }
 
-        // If the sum of all the alphas is tiny, assume that there's pretty
-        // much no data here. The minimum real alpha value is 2/(255 * 1000).
-        double minimum_real_alpha = 1.5 / 255.0 / 1000.0;
-        return total_alpha > minimum_real_alpha;
-    }
-
-    bool FirstValidCompositeData::get_pixel_double(double &value,
-                                                   const int x,
-                                                   const int y,
-                                                   const int b) const
-    {
-        return get_interpolated_pixel_double(
-            value, static_cast<double>(x), static_cast<double>(y), b);
-    }
-
-    bool FirstValidCompositeData::get_interpolated_pixel_double(
-        double &value, const double x, const double y, const int b) const
-    {
-        // Note: When interpolation is disabled via set_interpolating(false),
-        // we still call get_interpolated_pixel_double on child images.
-        // The interpolation flag is passed through to children via
-        // TranslatedData::set_interpolating, so each child will do
-        // nearest-neighbor rounding in its own coordinate space.
-        // This is correct because child images need to transform world
-        // coordinates to their pixel coordinates before rounding.
-
-        // Simply return the first valid pixel without any blending.
-        // This is appropriate for orbital DEMs where tiles have identical
-        // edge pixels and blending would create artificial discontinuities.
-        for (int i = 0; i < get_count(); i++)
+        if (summed_weight <= 0.0)
         {
-            double current_height = 0.0;
-
-            if (images.at(i)->get_bands() == 1)
-            {
-                // Support single-band images (PGM format)
-                if (images.at(i)->get_interpolated_pixel_double(
-                        current_height, x, y, 0))
-                {
-                    value = current_height;
-                    return true;
-                }
-            }
-            else
-            {
-                // Multi-band images - check alpha for validity
-                double current_alpha = 0.0;
-
-                // Check if pixel is in bounds
-                if (!images.at(i)->get_interpolated_pixel_double(
-                        current_height, x, y, b))
-                {
-                    continue;
-                }
-
-                // Get alpha value
-                if (images.at(i)->get_alpha_band() < 0)
-                {
-                    // No alpha band - assume valid
-                    value = current_height;
-                    return true;
-                }
-                else if (!images.at(i)->get_interpolated_pixel_double(
-                             current_alpha, x, y,
-                             images.at(i)->get_alpha_band()))
-                {
-                    // Has alpha band but no alpha at this pixel - skip
-                    continue;
-                }
-
-                // Check if alpha indicates valid data (> 1.01)
-                if (current_alpha > 1.01)
-                {
-                    value = current_height;
-                    return true;
-                }
-            }
+            // No child had data here
+            return false;
         }
 
-        // No valid data found in any image
-        return false;
+        value = summed_weighted_height / summed_weight;
+        return true;
+    }
+
+    void AlphaBlendingCompositeData::set_feather_width(const double pixels)
+    {
+        feather_width = pixels;
+    }
+
+    double AlphaBlendingCompositeData::get_feather_width() const
+    {
+        return feather_width;
     }
 
     bool ScoredCompositeData::get_pixel_double(double &value,
@@ -443,6 +374,22 @@ namespace rsvp
                 image->set_interpolating(enable);
             }
         }
+    }
+
+    double CompositeData::get_edge_distance(const double x,
+                                            const double y) const
+    {
+        double distance = 0.0;
+
+        for (const auto &image : images)
+        {
+            if (image)
+            {
+                distance = std::max(distance, image->get_edge_distance(x, y));
+            }
+        }
+
+        return distance;
     }
 
 }

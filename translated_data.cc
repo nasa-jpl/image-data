@@ -230,6 +230,20 @@ namespace rsvp
         }
     }
 
+    double TranslatedData::get_edge_distance(const double x,
+                                             const double y) const
+    {
+        if (transformed_image == nullptr)
+        {
+            return 0.0;
+        }
+
+        double sample = ixx * x + iyx * y + i_x;
+        double line = ixy * x + iyy * y + i_y;
+
+        return transformed_image->get_edge_distance(sample, line);
+    }
+
     TerrainBounds TranslatedData::get_bounds() const
     {
         if (!transformed_image)

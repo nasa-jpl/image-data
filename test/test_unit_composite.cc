@@ -5,7 +5,9 @@
 #include <img_data_gtest/gtest.h>
 #include <test_utils/test_utils.h>
 
+#include <algorithm>
 #include <cmath>
+#include <vector>
 
 #include "Config.h"
 
@@ -192,15 +194,14 @@ namespace
         EXPECT_DOUBLE_EQ(average_composite_value,
                          ((left_value + right_value) / 2.0));
 
-        // As both wedges have non-interpolated data and we added the right
-        // wedge last, confirm that the value returned from the lr composite is
-        // the same as just the right wedge
-        EXPECT_DOUBLE_EQ(alpha_blending_lr_value, right_value);
+        // The feathered alpha blend is independent of the order in which the
+        // wedges were added
+        EXPECT_DOUBLE_EQ(alpha_blending_lr_value, alpha_blending_rl_value);
 
-        // As both wedges have non-interpolated data and we added the right
-        // wedge last, confirm that the value returned from the rl composite is
-        // the same as just the right wedge
-        EXPECT_DOUBLE_EQ(alpha_blending_rl_value, left_value);
+        // Both wedges have real (alpha 255) data here and this point is far
+        // from both image borders, so the two wedges are weighted equally
+        EXPECT_DOUBLE_EQ(alpha_blending_lr_value,
+                         ((left_value + right_value) / 2.0));
 
         // This is a point that is only defined in the left wedge
         x = -227.23;
@@ -314,25 +315,21 @@ namespace
         // The AverageCompositeData result should match the weighted average.
         EXPECT_DOUBLE_EQ(average_composite_value, interpolated_value);
 
-        // The lr AlphaBlendingCompositeData should not match the left-wedge,
-        // because the right-wedge comes later and has a non-minimum alpha
-        // value
+        // The feathered alpha blend is independent of the order in which the
+        // wedges were added, and lies strictly between the two wedges
+        EXPECT_DOUBLE_EQ(alpha_blending_lr_value, alpha_blending_rl_value);
         EXPECT_NE(alpha_blending_lr_value, interpolated_value);
         EXPECT_GT(left_value, alpha_blending_lr_value);
         EXPECT_GT(alpha_blending_lr_value, right_value);
 
         // The alpha blended value should be closer to the left-wedge value
-        // than the weighted average because we heaviliy weight real data over
-        // extrapolated data in the alpha-blending algorithm.
+        // than the weighted average because the alpha confidence is squared,
+        // which prefers real data over extrapolated data.
         double wavg_dist_to_right_wedge =
             std::abs(right_value - interpolated_value);
         double alpha_dist_to_right_wedge =
             std::abs(right_value - alpha_blending_lr_value);
         EXPECT_GT(alpha_dist_to_right_wedge, wavg_dist_to_right_wedge);
-
-        // For the rl version of the AverageCompositeData, the result should
-        // exactly match the left wedge, as it comes last
-        EXPECT_DOUBLE_EQ(alpha_blending_rl_value, left_value);
 
 
         // This is a point that is not defined in either wedge, but is very
@@ -372,21 +369,123 @@ namespace
         // The AverageCompositeData result should match the weighted average.
         EXPECT_DOUBLE_EQ(average_composite_value, interpolated_value);
 
-        // Both of the lr and the rl AlphaBlendingCompositeData should be
-        // between the left and right values, but the lr version should be
-        // closer to the right wedge and the rl version should be closer to the
-        // left wedge.
-        if (left_value > right_value)
+        // The lr and rl AlphaBlendingCompositeData should agree, lie between
+        // the left and right values, and be closer to the left wedge (which
+        // has the higher alpha) than the plain weighted average is.
+        EXPECT_DOUBLE_EQ(alpha_blending_lr_value, alpha_blending_rl_value);
+        EXPECT_GT(alpha_blending_lr_value, std::min(left_value, right_value));
+        EXPECT_LT(alpha_blending_lr_value, std::max(left_value, right_value));
+        EXPECT_LT(std::abs(left_value - alpha_blending_lr_value),
+                  std::abs(left_value - interpolated_value));
+    }
+
+    // Regression test for seam artifacts: the composited surface must not
+    // contain steps that are not present in either of the wedges themselves.
+    // The old alpha blending had a 1000x weight cliff at alpha 254.9 that
+    // produced ~0.24 m single-sample spikes wherever a wedge's interpolated
+    // alpha crossed that threshold.
+    TEST_F(CompositeTest, no_seam_artifacts)
+    {
+        const double step = 0.02;
+        const double x_min = -240.0;
+        const double x_max = -226.0;
+        const double y_min = 76.0;
+        const double y_max = 92.0;
+
+        const int nx = static_cast<int>((x_max - x_min) / step);
+        const int ny = static_cast<int>((y_max - y_min) / step);
+
+        // Height of a wedge at a point, or NaN if it has no data there
+        const auto wedge_height =
+            [](const rsvp::ImageData &wedge, double x, double y) -> double {
+            double height = 0.0;
+            double alpha = 0.0;
+            if (!wedge.get_interpolated_pixel_double(height, x, y, 1) ||
+                !wedge.get_interpolated_pixel_double(alpha, x, y, 2) ||
+                alpha < 1.01)
+            {
+                return std::nan("");
+            }
+            return height;
+        };
+
+        const auto jump = [](double a, double b) -> double {
+            return (std::isnan(a) || std::isnan(b)) ? 0.0 : std::abs(a - b);
+        };
+
+        std::vector<double> composite_row(nx);
+        std::vector<double> left_row(nx);
+        std::vector<double> right_row(nx);
+        std::vector<double> composite_prev(nx, std::nan(""));
+        std::vector<double> left_prev(nx, std::nan(""));
+        std::vector<double> right_prev(nx, std::nan(""));
+
+        double max_excess = 0.0;
+        int excess_over_2cm = 0;
+
+        for (int j = 0; j < ny; j++)
         {
-            EXPECT_GT(left_value, alpha_blending_rl_value);
-            EXPECT_GT(alpha_blending_rl_value, alpha_blending_lr_value);
-            EXPECT_GT(alpha_blending_lr_value, right_value);
+            const double y = y_min + j * step;
+            for (int i = 0; i < nx; i++)
+            {
+                const double x = x_min + i * step;
+
+                double value = 0.0;
+                composite_row[i] =
+                    alpha_blending_lr->get_interpolated_pixel_double(
+                        value, x, y, 1)
+                    ? value
+                    : std::nan("");
+                left_row[i] = wedge_height(*left_frame, x, y);
+                right_row[i] = wedge_height(*right_frame, x, y);
+
+                // Compare against the previous sample in x and in y
+                for (int direction = 0; direction < 2; direction++)
+                {
+                    const bool along_x = (direction == 0);
+                    if (along_x && i == 0)
+                    {
+                        continue;
+                    }
+
+                    const double c_prev =
+                        along_x ? composite_row[i - 1] : composite_prev[i];
+                    const double l_prev =
+                        along_x ? left_row[i - 1] : left_prev[i];
+                    const double r_prev =
+                        along_x ? right_row[i - 1] : right_prev[i];
+
+                    if (std::isnan(c_prev) || std::isnan(composite_row[i]))
+                    {
+                        continue;
+                    }
+
+                    // The wedges themselves contain real steps (rocks). Only
+                    // count the part of the composite's step that exceeds
+                    // the largest step in either wedge at the same place.
+                    const double composite_jump =
+                        jump(composite_row[i], c_prev);
+                    const double wedge_jump =
+                        std::max(jump(left_row[i], l_prev),
+                                 jump(right_row[i], r_prev));
+                    const double excess = composite_jump - wedge_jump;
+
+                    max_excess = std::max(max_excess, excess);
+                    if (excess > 0.02)
+                    {
+                        excess_over_2cm++;
+                    }
+                }
+            }
+            composite_prev = composite_row;
+            left_prev = left_row;
+            right_prev = right_row;
         }
-        else
-        {
-            EXPECT_LT(left_value, alpha_blending_rl_value);
-            EXPECT_LT(alpha_blending_rl_value, alpha_blending_lr_value);
-            EXPECT_LT(alpha_blending_lr_value, right_value);
-        }
+
+        // Before feathering: max excess ~0.24 m at hundreds of samples.
+        // After: a few cm, only where both wedges are deep in their
+        // extrapolation tails (alpha 1-3 on both sides).
+        EXPECT_LT(max_excess, 0.10);
+        EXPECT_LT(excess_over_2cm, 40);
     }
 }
