@@ -192,39 +192,6 @@ namespace rsvp
     };
 
     /**
-     * @brief A class that returns the first valid pixel without blending.
-     *
-     * This composite type is useful for orbital DEMs where tiles have
-     * identical edge pixels. It avoids blending different bilinear
-     * interpolations of the same location, which can create artificial
-     * discontinuities at tile boundaries.
-     *
-     * Heightmap-style ImageData objects have three bands:
-     *
-     *  0: Real, uninterpolated height values, or 3.4e38 if no data is present.
-     *  1: Interpolated height values.
-     *  2: Alpha value. 255 if uniterpolated data is present, decaying by
-     *     12.5/pixel away from uniterpolated data to a minimum of 1.
-     *
-     */
-    class FirstValidCompositeData final : public CompositeData
-    {
-    public:
-        // Return an exact pixel value as a double
-        virtual bool get_pixel_double(double &value,
-                                      const int x,
-                                      const int y,
-                                      const int band) const override;
-
-        // Return an interpolated pixel value as a double
-        virtual bool get_interpolated_pixel_double(
-            double &value,
-            const double x,
-            const double y,
-            const int band) const override;
-    };
-
-    /**
      * @brief A class to composite terrain classification-style ImageData
      * objects.
      *
