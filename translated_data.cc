@@ -143,6 +143,10 @@ namespace rsvp
         //     [  line  ] = [ ixy iyy i_y ] * [ Y ]
         //     [   1    ]   [  0   0   1  ]   [ 1 ]
 
+        // This image just moved, so anything cached about where images sit is
+        // out of date
+        invalidate_geometry();
+
         double determinant = txx * tyy - tyx * txy;
 
         // Compute R'
@@ -264,27 +268,44 @@ namespace rsvp
             return underlying_bounds;
         }
 
-        if (get_width() < 1 || get_height() < 1)
-        {
-            return TerrainBounds();
-        }
+        // The corners of the region we transform, in the stored image's own
+        // coordinates.
+        double first_sample = 0.0;
+        double first_line = 0.0;
+        double last_sample = 0.0;
+        double last_line = 0.0;
 
-        // Bounds describe the extent of the pixel centers, so the far corner
-        // is the last pixel - (width - 1, height - 1) - not (width, height).
-        const double last_sample = get_width() - 1;
-        const double last_line = get_height() - 1;
+        if (get_width() >= 1 && get_height() >= 1)
+        {
+            // The stored image has a pixel grid, so our extent is where that
+            // grid lands. Bounds describe the extent of the pixel centers, so
+            // the far corner is the last pixel - (width - 1, height - 1) - not
+            // (width, height).
+            last_sample = get_width() - 1;
+            last_line = get_height() - 1;
+        }
+        else
+        {
+            // No grid of its own, so it is a container of images that are
+            // already placed - a CompositeData, say. Its bounds are in the
+            // coordinates we transform from, so transform those instead.
+            first_sample = underlying_bounds.min_x;
+            first_line = underlying_bounds.min_y;
+            last_sample = underlying_bounds.max_x;
+            last_line = underlying_bounds.max_y;
+        }
 
         double corners_x[4];
         double corners_y[4];
 
-        corners_x[0] = t_x;
-        corners_y[0] = t_y;
+        corners_x[0] = txx * first_sample + tyx * first_line + t_x;
+        corners_y[0] = txy * first_sample + tyy * first_line + t_y;
 
-        corners_x[1] = txx * last_sample + t_x;
-        corners_y[1] = txy * last_sample + t_y;
+        corners_x[1] = txx * last_sample + tyx * first_line + t_x;
+        corners_y[1] = txy * last_sample + tyy * first_line + t_y;
 
-        corners_x[2] = tyx * last_line + t_x;
-        corners_y[2] = tyy * last_line + t_y;
+        corners_x[2] = txx * first_sample + tyx * last_line + t_x;
+        corners_y[2] = txy * first_sample + tyy * last_line + t_y;
 
         corners_x[3] = txx * last_sample + tyx * last_line + t_x;
         corners_y[3] = txy * last_sample + tyy * last_line + t_y;

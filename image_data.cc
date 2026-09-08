@@ -8,10 +8,33 @@
 #include <stdexcept>
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 
 namespace rsvp
 {
+
+    namespace
+    {
+        // Starts at 1 so that a cache stamped with 0 is one that has never
+        // been computed. It would take billions of moves to wrap back onto a
+        // value a live cache is holding, which no run comes close to.
+        std::atomic<unsigned long> &geometry_counter()
+        {
+            static std::atomic<unsigned long> counter(1);
+            return counter;
+        }
+    }
+
+    unsigned long geometry_version()
+    {
+        return geometry_counter().load(std::memory_order_relaxed);
+    }
+
+    void invalidate_geometry()
+    {
+        geometry_counter().fetch_add(1, std::memory_order_relaxed);
+    }
 
     ImageData::ImageData() :
         alpha_band(-1),

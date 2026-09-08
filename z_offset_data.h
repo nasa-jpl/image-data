@@ -67,6 +67,25 @@ namespace rsvp
                                            double y,
                                            int band) const override;
 
+        /**
+         * @brief Sample the stored image clamped to its nearest valid pixel,
+         * and offset and scale the result.
+         *
+         * The default implementation clamps against this object's own
+         * `get_width` and `get_height`, which a ZOffsetData reports on behalf
+         * of the stored image. That is only the same coordinate space if the
+         * stored image has a pixel grid of its own; wrap a TranslatedData or a
+         * CompositeData and it is not. Hand the request down instead, so
+         * whichever image does own a grid is the one that clamps to it.
+         *
+         * @see ImageData::get_clamped_pixel_double
+         */
+        bool get_clamped_pixel_double(double &value,
+                                      double &weight,
+                                      double x,
+                                      double y,
+                                      int band) const override;
+
         // Return an exact pixel value as an int
         bool get_pixel_int(int &value, int x, int y, int band) const override;
 

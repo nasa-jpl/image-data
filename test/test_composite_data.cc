@@ -509,24 +509,40 @@ namespace
     };
 
     // One tile of a SeamMosaic, shaped like a real heightmap tile: band 0 and
-    // band 1 hold heights, band 2 holds a fully-opaque alpha, and coordinates
-    // outside the tile are rejected outright.
+    // band 1 hold heights, band 2 holds an alpha, and coordinates outside the
+    // tile are rejected outright.
     class SeamTile : public rsvp::ImageData
     {
     private:
         int origin_x;
         int origin_y;
+        double alpha;
 
     public:
-        SeamTile(int in_origin_x, int in_origin_y) :
+        SeamTile(int in_origin_x, int in_origin_y, double in_alpha = 255.0) :
             origin_x(in_origin_x),
-            origin_y(in_origin_y)
+            origin_y(in_origin_y),
+            alpha(in_alpha)
         {
         }
 
         int get_bands() const override
         {
             return 3;
+        }
+
+        // A tile knows how big it is but not where it sits, so its bounds run
+        // over its own pixel centers. That is enough for whatever places it -
+        // a TranslatedData - to take it as locatable.
+        rsvp::TerrainBounds get_bounds() const override
+        {
+            rsvp::TerrainBounds bounds;
+            bounds.valid = true;
+            bounds.min_x = 0.0;
+            bounds.min_y = 0.0;
+            bounds.max_x = get_width() - 1;
+            bounds.max_y = get_height() - 1;
+            return bounds;
         }
 
         int get_width() const override
@@ -550,7 +566,7 @@ namespace
 
             if (band == 2)
             {
-                value = 255.0;
+                value = alpha;
             }
             else
             {
@@ -563,7 +579,13 @@ namespace
 
     // Fill `composite` with the tiles of a SeamMosaic, each placed by a
     // TranslatedData exactly as a .mod file would place it.
-    void build_seam_mosaic(rsvp::CompositeData &composite)
+    //
+    // `declare_alpha_band` mirrors the difference between a tile that came
+    // through ModData, which labels the alpha band of everything it reads, and
+    // one assembled by hand, which leaves it unset.
+    void build_seam_mosaic(rsvp::CompositeData &composite,
+                           bool declare_alpha_band = true,
+                           double alpha = 255.0)
     {
         for (int tile_x = 0; tile_x < SeamMosaic::TILES_PER_SIDE; tile_x++)
         {
@@ -572,8 +594,13 @@ namespace
                 const int origin_x = tile_x * SeamMosaic::TILE_SIZE;
                 const int origin_y = tile_y * SeamMosaic::TILE_SIZE;
 
-                auto tile = std::make_shared<SeamTile>(origin_x, origin_y);
-                tile->set_alpha_band(2);
+                auto tile =
+                    std::make_shared<SeamTile>(origin_x, origin_y, alpha);
+
+                if (declare_alpha_band)
+                {
+                    tile->set_alpha_band(2);
+                }
 
                 composite.add_image(std::make_shared<rsvp::TranslatedData>(
                     tile, origin_x, origin_y, 1.0, 0.0));
@@ -690,26 +717,9 @@ TEST(composite_data, composite_data_seams_stop_at_the_mosaic_edge)
 // centers, so the far corner is the last pixel rather than one pixel past it.
 TEST(composite_data, translated_data_bounds_span_the_pixel_centers)
 {
-    // SeamTile has no spatial labels of its own, so wrap something that does
-    class BoundedSeamTile : public SeamTile
-    {
-    public:
-        BoundedSeamTile() :
-            SeamTile(0, 0)
-        {
-        }
-
-        rsvp::TerrainBounds get_bounds() const override
-        {
-            rsvp::TerrainBounds bounds;
-            bounds.valid = true;
-            return bounds;
-        }
-    };
-
     const double scale = 2.0;
     const rsvp::TranslatedData translated(
-        std::make_shared<BoundedSeamTile>(), 100.0, -50.0, scale, 0.0);
+        std::make_shared<SeamTile>(0, 0), 100.0, -50.0, scale, 0.0);
 
     const auto bounds = translated.get_bounds();
     ASSERT_TRUE(bounds.valid);
@@ -777,4 +787,108 @@ TEST(composite_data, vicar_data_bounds_span_the_pixel_centers)
     EXPECT_DOUBLE_EQ(bounds.max_y, y_min + (lines - 1) * y_scale);
 
     ASSERT_TRUE(image_data::image_data_test_rm_directory(tmp_dir) == 0);
+}
+
+// A composite has no pixel grid of its own, so a TranslatedData placing one
+// cannot derive its extent from a width and a height. It has to transform the
+// bounds the composite reports, which are already in the coordinates being
+// transformed from.
+TEST(composite_data, translated_data_bounds_over_a_composite)
+{
+    auto mosaic = std::make_shared<rsvp::AlphaBlendingCompositeData>();
+    build_seam_mosaic(*mosaic);
+
+    const auto mosaic_bounds = mosaic->get_bounds();
+    ASSERT_TRUE(mosaic_bounds.valid);
+    EXPECT_DOUBLE_EQ(mosaic_bounds.min_x, 0.0);
+    EXPECT_DOUBLE_EQ(mosaic_bounds.max_x, SeamMosaic::GRID_SIZE - 1);
+
+    const double scale = 2.0;
+    const rsvp::TranslatedData translated(mosaic, 100.0, -50.0, scale, 0.0);
+
+    const auto bounds = translated.get_bounds();
+    ASSERT_TRUE(bounds.valid);
+    EXPECT_DOUBLE_EQ(bounds.min_x, 100.0 + scale * mosaic_bounds.min_x);
+    EXPECT_DOUBLE_EQ(bounds.min_y, -50.0 + scale * mosaic_bounds.min_y);
+    EXPECT_DOUBLE_EQ(bounds.max_x, 100.0 + scale * mosaic_bounds.max_x);
+    EXPECT_DOUBLE_EQ(bounds.max_y, -50.0 + scale * mosaic_bounds.max_y);
+}
+
+// Merging the children's bounds is too slow to redo per pixel lookup, so a
+// composite remembers them. Moving a child afterwards has to be visible
+// through that.
+TEST(composite_data, bounds_follow_a_moved_child)
+{
+    auto placed = std::make_shared<rsvp::TranslatedData>(
+        std::make_shared<SeamTile>(0, 0), 0.0, 0.0, 1.0, 0.0);
+
+    rsvp::AlphaBlendingCompositeData composite;
+    composite.add_image(placed);
+
+    // Ask once to get the bounds remembered
+    auto bounds = composite.get_bounds();
+    ASSERT_TRUE(bounds.valid);
+    EXPECT_DOUBLE_EQ(bounds.min_x, 0.0);
+    EXPECT_DOUBLE_EQ(bounds.min_y, 0.0);
+
+    placed->set_trans(100.0, -50.0, 1.0, 0.0);
+
+    bounds = composite.get_bounds();
+    ASSERT_TRUE(bounds.valid);
+    EXPECT_DOUBLE_EQ(bounds.min_x, 100.0);
+    EXPECT_DOUBLE_EQ(bounds.min_y, -50.0);
+    EXPECT_DOUBLE_EQ(bounds.max_x, 100.0 + SeamMosaic::TILE_SIZE - 1);
+    EXPECT_DOUBLE_EQ(bounds.max_y, -50.0 + SeamMosaic::TILE_SIZE - 1);
+
+    // And adding one has to be too
+    composite.add_image(std::make_shared<rsvp::TranslatedData>(
+        std::make_shared<SeamTile>(0, 0), -10.0, -10.0, 1.0, 0.0));
+
+    bounds = composite.get_bounds();
+    ASSERT_TRUE(bounds.valid);
+    EXPECT_DOUBLE_EQ(bounds.min_x, -10.0);
+    // The moved tile still reaches lower than the added one
+    EXPECT_DOUBLE_EQ(bounds.min_y, -50.0);
+
+    // As does taking one away
+    composite.remove_image(1);
+
+    bounds = composite.get_bounds();
+    ASSERT_TRUE(bounds.valid);
+    EXPECT_DOUBLE_EQ(bounds.min_x, 100.0);
+    EXPECT_DOUBLE_EQ(bounds.min_y, -50.0);
+}
+
+// Whether a seam holds real data has to be judged by the same rule as the
+// pixels on either side of it. A three-band tile keeps its alpha in band 2
+// whether or not it ever said so, and a tile that came from anywhere but
+// ModData will not have said so.
+TEST(composite_data, undeclared_alpha_band_still_governs_seams)
+{
+    // 3.5 is on the vertical seam, 1.5 is inside a tile vertically
+    const double seam_x = SeamMosaic::TILE_SIZE - 0.5;
+    const double seam_y = 1.5;
+
+    double value = 0.0;
+
+    rsvp::AlphaBlendingCompositeData opaque;
+    build_seam_mosaic(opaque, false /* declare_alpha_band */, 255.0);
+
+    double reference = 0.0;
+    ASSERT_TRUE(SeamMosaic::expected(reference, seam_x, seam_y));
+    EXPECT_TRUE(
+        opaque.get_interpolated_pixel_double(value, seam_x, seam_y, 1));
+    EXPECT_NEAR(value, reference, 1e-12);
+
+    // The minimum alpha means no real data, so there is nothing to
+    // reconstruct the band from - not even though the heights are there
+    rsvp::AlphaBlendingCompositeData transparent;
+    build_seam_mosaic(transparent, false /* declare_alpha_band */, 1.0);
+
+    EXPECT_FALSE(
+        transparent.get_interpolated_pixel_double(value, seam_x, seam_y, 1));
+
+    // Which matches what it does away from the seam
+    EXPECT_FALSE(
+        transparent.get_interpolated_pixel_double(value, 1.5, 1.5, 1));
 }

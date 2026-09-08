@@ -13,6 +13,23 @@ namespace rsvp
     class CompositeData : public ImageData
     {
 
+    private:
+        // Merging the children's bounds means asking each of them where it is,
+        // which for a VicarData means parsing its labels. Too slow to repeat
+        // per pixel lookup, so remember the answer for as long as no image has
+        // moved.
+        mutable TerrainBounds cached_bounds;
+        mutable unsigned long cached_bounds_version = 0;
+
+        /**
+         * @brief The merged bounds of the children, recomputed only when an
+         * image has moved since they were last worked out.
+         *
+         * Returns a reference because pixel lookups consult this and do not
+         * need a copy.
+         */
+        const TerrainBounds &merged_bounds() const;
+
     protected:
         std::vector<std::shared_ptr<rsvp::ImageData> > images;
 
@@ -123,6 +140,66 @@ namespace rsvp
                                    double x,
                                    double y,
                                    int band) const;
+
+        /**
+         * @brief Cheaply rule out (x, y) being on one of this composite's
+         * seams.
+         *
+         * A seam is a band between two images, so it takes two images to have
+         * one, and it lies inside the composite rather than beyond its outer
+         * edge. Both are much cheaper to check than the sample-every-child
+         * loops that reconstruct a seam, and out-of-terrain lookups are common
+         * enough to be worth the check.
+         *
+         * @param[in] x The "x-like" coordinate of the pixel of interest
+         * @param[in] y The "y-like" coordinate of the pixel of interest
+         *
+         * @return false if (x, y) cannot be on a seam. true means only that it
+         * might be.
+         */
+        bool could_be_on_seam(double x, double y) const;
+
+        /**
+         * @brief Work out which band of an image carries its alpha value.
+         *
+         * Prefers what the image declares. An image that declares nothing
+         * falls back on its format: a single-band PGM has no alpha, and a
+         * three-band heightmap or terrain classification keeps it in band 2.
+         *
+         * Every composite here resolves the alpha band through this, so that a
+         * seam is judged opaque or transparent by the same rule as the pixels
+         * on either side of it.
+         *
+         * @param[in] image The image to inspect
+         *
+         * @return The band carrying alpha, or -1 if the image has none.
+         */
+        static int get_alpha_band_of(const ImageData &image);
+
+        /**
+         * @brief Sample one child of the composite for a seam reconstruction.
+         *
+         * Takes the child's value at the point on its edge nearest to (x, y)
+         * along with the weight that point is owed, and rejects children that
+         * hold no real data there.
+         *
+         * @param[in]  image  The child to sample
+         * @param[out] value  The value sampled from `image`
+         * @param[out] weight The weight `value` is owed
+         * @param[in]  x      The "x-like" coordinate of the pixel of interest
+         * @param[in]  y      The "y-like" coordinate of the pixel of interest
+         * @param[in]  band   The band of the pixel to access
+         *
+         * @return false if `image` is more than a pixel from (x, y), or is
+         * transparent there, either of which means it does not share this
+         * seam.
+         */
+        bool get_seam_sample(const ImageData &image,
+                             double &value,
+                             double &weight,
+                             double x,
+                             double y,
+                             int band) const;
     };
 
     /**

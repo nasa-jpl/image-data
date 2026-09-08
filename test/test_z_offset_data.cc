@@ -1,4 +1,5 @@
 #include <platform.h>
+#include <translated_data.h>
 #include <z_offset_data.h>
 
 #include <img_data_gtest/gtest.h>
@@ -301,4 +302,88 @@ TEST(z_offset_data, alpha_band)
     // Set and verify
     nullData.set_alpha_band(1);
     EXPECT_EQ(nullData.get_alpha_band(), 1);
+}
+
+TEST(z_offset_data, get_clamped_pixel_double)
+{
+    auto baseImage = std::make_shared<ZOffsetTestImage>();
+    rsvp::ZOffsetData offsetData(baseImage);
+    offsetData.set_offset_and_scale(0, 100.0, 2.0);
+
+    double value = 0.0;
+    double weight = 0.0;
+
+    // Inside the image nothing is clamped, so the sample carries full weight,
+    // offset and scaled like any other
+    EXPECT_TRUE(
+        offsetData.get_clamped_pixel_double(value, weight, 1.0, 1.0, 0));
+    EXPECT_NEAR(value, 100.0 + 2.0 * 5.0, 0.001);
+    EXPECT_NEAR(weight, 1.0, 0.001);
+
+    // A quarter pixel off the left edge clamps back onto pixel (0, 1) and
+    // keeps three quarters of a say
+    EXPECT_TRUE(
+        offsetData.get_clamped_pixel_double(value, weight, -0.25, 1.0, 0));
+    EXPECT_NEAR(value, 100.0 + 2.0 * 4.0, 0.001);
+    EXPECT_NEAR(weight, 0.75, 0.001);
+
+    // A full pixel out and it has no say at all
+    EXPECT_FALSE(
+        offsetData.get_clamped_pixel_double(value, weight, -1.0, 1.0, 0));
+
+    // Bands it does not have
+    EXPECT_FALSE(
+        offsetData.get_clamped_pixel_double(value, weight, 1.0, 1.0, 1));
+    EXPECT_FALSE(
+        offsetData.get_clamped_pixel_double(value, weight, 1.0, 1.0, -1));
+
+    // And nothing to sample at all
+    rsvp::ZOffsetData nullData(nullptr);
+    EXPECT_FALSE(
+        nullData.get_clamped_pixel_double(value, weight, 0.0, 0.0, 0));
+}
+
+// SSim stacks a ZOffsetData over a TranslatedData over the terrain, so the
+// clamping that a composite's seam reconstruction depends on has to reach
+// through both to the image that actually owns a pixel grid. Clamping against
+// the width and height a ZOffsetData reports on its child's behalf would pit
+// world coordinates against pixel indices.
+TEST(z_offset_data, get_clamped_pixel_double_through_a_transform)
+{
+    const double scale = 10.0;
+    const double x_offset = 1000.0;
+    const double y_offset = -500.0;
+
+    auto baseImage = std::make_shared<ZOffsetTestImage>();
+    auto placed = std::make_shared<rsvp::TranslatedData>(
+        baseImage, x_offset, y_offset, scale, 0.0);
+
+    rsvp::ZOffsetData offsetData(placed);
+    offsetData.set_offset_and_scale(0, 100.0, 2.0);
+
+    double value = 0.0;
+    double weight = 0.0;
+
+    // Pixel (0, 1) sits here in world coordinates
+    const double pixel_01_x = x_offset;
+    const double pixel_01_y = y_offset + scale;
+
+    EXPECT_TRUE(offsetData.get_clamped_pixel_double(
+        value, weight, pixel_01_x, pixel_01_y, 0));
+    EXPECT_NEAR(value, 100.0 + 2.0 * 4.0, 0.001);
+    EXPECT_NEAR(weight, 1.0, 0.001);
+
+    // A quarter of a pixel - a quarter of `scale` in world units - off the
+    // left edge clamps back onto it, and the weight is in pixels either way
+    EXPECT_TRUE(offsetData.get_clamped_pixel_double(
+        value, weight, pixel_01_x - 0.25 * scale, pixel_01_y, 0));
+    EXPECT_NEAR(value, 100.0 + 2.0 * 4.0, 0.001);
+    EXPECT_NEAR(weight, 0.75, 0.001);
+
+    // Past a whole pixel out and it has no say. Exactly a pixel out is left
+    // alone deliberately: inverting the transform lands either side of the
+    // boundary depending on the offsets, and a weight of order 1e-14 either
+    // way is nowhere near the sum a seam reconstruction requires.
+    EXPECT_FALSE(offsetData.get_clamped_pixel_double(
+        value, weight, pixel_01_x - 1.25 * scale, pixel_01_y, 0));
 }

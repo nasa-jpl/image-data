@@ -69,6 +69,27 @@ namespace rsvp
         return true;
     }
 
+    bool ZOffsetData::get_clamped_pixel_double(double &value,
+                                               double &weight,
+                                               const double x,
+                                               const double y,
+                                               const int band) const
+    {
+        if (img == nullptr || band < 0 || band >= get_bands())
+        {
+            return false;
+        }
+
+        double raw_result = 0.0;
+        if (!img->get_clamped_pixel_double(raw_result, weight, x, y, band))
+        {
+            return false;
+        }
+
+        value = (raw_result * scales.at(band)) + offsets.at(band);
+        return true;
+    }
+
     bool ZOffsetData::get_pixel_int(int &value,
                                     const int x,
                                     const int y,

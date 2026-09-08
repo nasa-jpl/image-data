@@ -10,6 +10,34 @@ namespace rsvp
 {
 
     /**
+     * @brief A counter that changes whenever the placement of any image
+     * changes.
+     *
+     * Deriving the bounds of an image can be expensive - `VicarData` parses
+     * them out of its labels - so a container that queries its children's
+     * bounds repeatedly wants to cache the result. There is no way for a
+     * container to notice that a child has been moved underneath it, though,
+     * so instead every operation that moves an image bumps this counter, and a
+     * cache is only good for as long as the counter it was computed under.
+     *
+     * The counter starts at 1, so a cache stamped with 0 is one that has never
+     * been computed.
+     *
+     * @return The current version.
+     */
+    unsigned long geometry_version();
+
+    /**
+     * @brief Invalidate every cache derived from where images sit.
+     *
+     * Call this from anything that changes the placement or the membership of
+     * an image: setting a transform, or adding an image to a container.
+     *
+     * @see geometry_version
+     */
+    void invalidate_geometry();
+
+    /**
      * @brief A struct to represent the spatial bounds of terrain data.
      *
      * Bounds are specified in world coordinates (meters).
@@ -44,6 +72,28 @@ namespace rsvp
         double get_height() const
         {
             return max_y - min_y;
+        }
+
+        /**
+         * @brief Check whether a point falls inside the bounds.
+         *
+         * Bounds run to the centers of the outermost pixels rather than past
+         * them, so a point on the boundary is inside.
+         *
+         * @param[in] x      The "x-like" coordinate to test
+         * @param[in] y      The "y-like" coordinate to test
+         * @param[in] margin How far outside the bounds still counts as inside.
+         * Bounds and pixel lookups are derived by different routes - labels
+         * versus affine transforms - so a caller that must not reject a point
+         * the pixels do cover should leave itself a little slack here.
+         *
+         * @return false if the bounds are invalid, since then nothing is known
+         * about what they contain.
+         */
+        bool contains(double x, double y, double margin = 0.0) const
+        {
+            return valid && x >= min_x - margin && x <= max_x + margin &&
+                y >= min_y - margin && y <= max_y + margin;
         }
 
         /**
