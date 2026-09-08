@@ -7,6 +7,7 @@
 
 #include <stdexcept>
 
+#include <algorithm>
 #include <cmath>
 
 namespace rsvp
@@ -78,61 +79,86 @@ namespace rsvp
             return get_pixel_double(value, x_uninterp, y_uninterp, band);
         }
 
-        int int_x = static_cast<int>(x);
-        int int_y = static_cast<int>(y);
+        // We sample at (int_x, int_y) and (int_x+1, int_y+1), so those two
+        // must span the input. Floor rather than truncate - truncation rounds
+        // toward zero, which for coordinates in (-1, 0) would leave `int_x` at
+        // 0 and silently mirror the interpolation about the image edge instead
+        // of reporting that the coordinate is out of bounds.
+        const int int_x = static_cast<int>(std::floor(x));
+        const int int_y = static_cast<int>(std::floor(y));
 
-        if (int_x < 0.0)
+        const double frac_x = x - int_x;
+        const double frac_y = y - int_y;
+
+        const double weights[2][2] = {
+            {(1.0 - frac_x) * (1.0 - frac_y), (1.0 - frac_x) * frac_y},
+            {frac_x * (1.0 - frac_y), frac_x * frac_y}};
+
+        double sum = 0.0;
+
+        for (int offset_x = 0; offset_x < 2; offset_x++)
         {
-            // We sample at (int_x) and (int_x+1), so make sure that
-            // those two span the input
-            int_x--;
+            for (int offset_y = 0; offset_y < 2; offset_y++)
+            {
+                const double weight = weights[offset_x][offset_y];
+
+                if (weight == 0.0)
+                {
+                    // This corner contributes nothing, so do not require it to
+                    // exist. Without this, a coordinate landing exactly on the
+                    // last row or column of an image would fail.
+                    continue;
+                }
+
+                double corner = 0.0;
+                if (!get_pixel_double(
+                        corner, int_x + offset_x, int_y + offset_y, band))
+                {
+                    return false;
+                }
+
+                sum += weight * corner;
+            }
         }
 
-        if (int_y < 0.0)
+        value = sum;
+        return true;
+    }
+
+    bool ImageData::get_clamped_pixel_double(double &value,
+                                             double &weight,
+                                             const double x,
+                                             const double y,
+                                             const int band) const
+    {
+        const double last_x = get_width() - 1;
+        const double last_y = get_height() - 1;
+
+        if (last_x < 0.0 || last_y < 0.0)
         {
-            // We sample at (int_y) and (int_y+1), so make sure that
-            // those two span the input
-            int_y--;
+            // No pixels to clamp to
+            return false;
         }
 
-        double frac_x = fabs(x - int_x);
-        double frac_y = fabs(y - int_y);
+        const double clamped_x = std::min(std::max(x, 0.0), last_x);
+        const double clamped_y = std::min(std::max(y, 0.0), last_y);
 
-        // Upper left (x, y)
-        double ul = 0.0;
-        if (!get_pixel_double(ul, int_x, int_y, band))
+        const double weight_x = 1.0 - fabs(x - clamped_x);
+        const double weight_y = 1.0 - fabs(y - clamped_y);
+
+        if (weight_x <= 0.0 || weight_y <= 0.0)
+        {
+            // More than a pixel outside the image, so this image has no say in
+            // what the value at (x, y) should be.
+            return false;
+        }
+
+        if (!get_interpolated_pixel_double(value, clamped_x, clamped_y, band))
         {
             return false;
         }
-        double ul_weight = (1.0 - frac_x) * (1.0 - frac_y);
 
-        // Upper right (x+1, y)
-        double ur = 0.0;
-        if (!get_pixel_double(ur, int_x + 1, int_y, band))
-        {
-            return false;
-        }
-        double ur_weight = frac_x * (1.0 - frac_y);
-
-        // Lower left (x, y+1)
-        double ll = 0.0;
-        if (!get_pixel_double(ll, int_x, int_y + 1, band))
-        {
-            return false;
-        }
-        double ll_weight = (1.0 - frac_x) * frac_y;
-
-        // Lower right (x+1, y+1)
-        double lr = 0.0;
-        if (!get_pixel_double(lr, int_x + 1, int_y + 1, band))
-        {
-            return false;
-        }
-        double lr_weight = frac_x * frac_y;
-
-        // Perform bilinear interpolation
-        value =
-            ul * ul_weight + ur * ur_weight + ll * ll_weight + lr * lr_weight;
+        weight = weight_x * weight_y;
         return true;
     }
 

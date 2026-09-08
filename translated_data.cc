@@ -188,6 +188,27 @@ namespace rsvp
         }
     }
 
+    bool TranslatedData::get_clamped_pixel_double(double &value,
+                                                  double &weight,
+                                                  const double x,
+                                                  const double y,
+                                                  const int band) const
+    {
+        if (transformed_image == nullptr)
+        {
+            return false;
+        }
+
+        // Clamping has to happen in the transformed image's pixel space, not
+        // in ours, so hand the transformed coordinates down rather than using
+        // the default implementation.
+        const double sample = ixx * x + iyx * y + i_x;
+        const double line = ixy * x + iyy * y + i_y;
+
+        return transformed_image->get_clamped_pixel_double(
+            value, weight, sample, line, band);
+    }
+
     void TranslatedData::set_alpha_band(int band)
     {
         ImageData::set_alpha_band(band);
@@ -243,20 +264,30 @@ namespace rsvp
             return underlying_bounds;
         }
 
+        if (get_width() < 1 || get_height() < 1)
+        {
+            return TerrainBounds();
+        }
+
+        // Bounds describe the extent of the pixel centers, so the far corner
+        // is the last pixel - (width - 1, height - 1) - not (width, height).
+        const double last_sample = get_width() - 1;
+        const double last_line = get_height() - 1;
+
         double corners_x[4];
         double corners_y[4];
 
         corners_x[0] = t_x;
         corners_y[0] = t_y;
 
-        corners_x[1] = txx * get_width() + t_x;
-        corners_y[1] = txy * get_width() + t_y;
+        corners_x[1] = txx * last_sample + t_x;
+        corners_y[1] = txy * last_sample + t_y;
 
-        corners_x[2] = tyx * get_height() + t_x;
-        corners_y[2] = tyy * get_height() + t_y;
+        corners_x[2] = tyx * last_line + t_x;
+        corners_y[2] = tyy * last_line + t_y;
 
-        corners_x[3] = txx * get_width() + tyx * get_height() + t_x;
-        corners_y[3] = txy * get_width() + tyy * get_height() + t_y;
+        corners_x[3] = txx * last_sample + tyx * last_line + t_x;
+        corners_y[3] = txy * last_sample + tyy * last_line + t_y;
 
         TerrainBounds result;
         result.valid = true;

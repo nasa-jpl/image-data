@@ -9,6 +9,17 @@
 namespace rsvp
 {
 
+    namespace
+    {
+        // The weights of the images surrounding a seam sum to exactly 1: that
+        // is what makes blending them equal to interpolating over the images
+        // as one grid. Anything less means the point is not enclosed by them -
+        // it is off the outer edge of the composite, or over a missing image -
+        // and filling it in would be extrapolating, not interpolating. The
+        // slack absorbs the rounding in the images' placements.
+        const double minimum_enclosing_weight = 1.0 - 1e-6;
+    }
+
     CompositeData::CompositeData() = default;
 
     CompositeData::~CompositeData()
@@ -149,7 +160,9 @@ namespace rsvp
         // much no data here
         if (summed_alpha < 0.00001)
         {
-            return false;
+            // ...unless (x, y) lands in the band between abutting images,
+            // which none of them can interpolate on its own.
+            return get_seam_pixel_double(value, x, y, b);
         }
         else
         {
@@ -286,7 +299,14 @@ namespace rsvp
         // If the sum of all the alphas is tiny, assume that there's pretty
         // much no data here. The minimum real alpha value is 2/(255 * 1000).
         double minimum_real_alpha = 1.5 / 255.0 / 1000.0;
-        return total_alpha > minimum_real_alpha;
+        if (total_alpha > minimum_real_alpha)
+        {
+            return true;
+        }
+
+        // No image covers (x, y). It may still land in the band between
+        // abutting images, which none of them can interpolate on its own.
+        return get_seam_pixel_double(value, x, y, b);
     }
 
     bool FirstValidCompositeData::get_pixel_double(double &value,
@@ -362,8 +382,12 @@ namespace rsvp
             }
         }
 
-        // No valid data found in any image
-        return false;
+        // No image covers (x, y). It may still land in the band between
+        // abutting tiles, which none of them can interpolate on its own. This
+        // is the common case for orbital DEMs, whose tiles abut without
+        // overlapping and so leave a one-pixel-wide seam between every pair of
+        // neighbors.
+        return get_seam_pixel_double(value, x, y, b);
     }
 
     bool ScoredCompositeData::get_pixel_double(double &value,
@@ -388,6 +412,7 @@ namespace rsvp
         // coordinates to their pixel coordinates before rounding.
 
         double max_score = std::numeric_limits<double>::min();
+        bool covered = false;
 
         for (int i = 0; i < get_count(); i++)
         {
@@ -404,6 +429,8 @@ namespace rsvp
                 continue;
             }
 
+            covered = true;
+
             if (current_score > max_score)
             {
                 max_score = current_score;
@@ -411,7 +438,50 @@ namespace rsvp
             }
         }
 
-        return value > std::numeric_limits<double>::min();
+        if (covered)
+        {
+            return value > std::numeric_limits<double>::min();
+        }
+
+        // No image covers (x, y). It may still land in the band between
+        // abutting images, which none of them can interpolate on its own. Take
+        // the value from the nearest image rather than blending across the
+        // seam like the height composites do - these bands hold terrain type
+        // identifiers, and the average of two identifiers is a third,
+        // unrelated one.
+        double max_weight = 0.0;
+        double summed_weight = 0.0;
+        double nearest_value = 0.0;
+
+        for (int i = 0; i < get_count(); i++)
+        {
+            double current_value = 0.0;
+            double current_weight = 0.0;
+
+            if (!images.at(i)->get_clamped_pixel_double(
+                    current_value, current_weight, x, y, b))
+            {
+                continue;
+            }
+
+            summed_weight += current_weight;
+
+            if (current_weight > max_weight)
+            {
+                max_weight = current_weight;
+                nearest_value = current_value;
+            }
+        }
+
+        // As in get_seam_pixel_double, only a point the images enclose is on a
+        // seam
+        if (summed_weight < minimum_enclosing_weight)
+        {
+            return false;
+        }
+
+        value = nearest_value;
+        return true;
     }
 
     TerrainBounds CompositeData::get_bounds() const
@@ -428,6 +498,106 @@ namespace rsvp
         }
 
         return combined_bounds;
+    }
+
+    bool CompositeData::get_seam_pixel_double(double &value,
+                                              const double x,
+                                              const double y,
+                                              const int band) const
+    {
+        double weighted_sum = 0.0;
+        double summed_weight = 0.0;
+
+        for (const auto &image : images)
+        {
+            double current_value = 0.0;
+            double current_weight = 0.0;
+
+            if (!image->get_clamped_pixel_double(
+                    current_value, current_weight, x, y, band))
+            {
+                // More than a pixel away from this image, so it is not one of
+                // the images sharing this seam.
+                continue;
+            }
+
+            if (image->get_bands() > 1 && image->get_alpha_band() >= 0)
+            {
+                double current_alpha = 0.0;
+                double alpha_weight = 0.0;
+
+                if (!image->get_clamped_pixel_double(current_alpha,
+                                                     alpha_weight,
+                                                     x,
+                                                     y,
+                                                     image->get_alpha_band()))
+                {
+                    continue;
+                }
+
+                if (current_alpha < 1.01)
+                {
+                    // The minimum alpha value means there is no real data here
+                    continue;
+                }
+            }
+
+            weighted_sum += current_weight * current_value;
+            summed_weight += current_weight;
+        }
+
+        if (summed_weight < minimum_enclosing_weight)
+        {
+            return false;
+        }
+
+        value = weighted_sum / summed_weight;
+        return true;
+    }
+
+    bool CompositeData::get_clamped_pixel_double(double &value,
+                                                 double &weight,
+                                                 const double x,
+                                                 const double y,
+                                                 const int band) const
+    {
+        // A composite has no pixel grid of its own to clamp to. If it covers
+        // (x, y) at all then nothing needs clamping and it gets the full say.
+        if (get_interpolated_pixel_double(value, x, y, band))
+        {
+            weight = 1.0;
+            return true;
+        }
+
+        // Otherwise (x, y) is off the composite's outer edge, which is the
+        // edge of whichever child lies nearest to it.
+        double largest_weight = 0.0;
+
+        for (const auto &image : images)
+        {
+            double current_value = 0.0;
+            double current_weight = 0.0;
+
+            if (!image->get_clamped_pixel_double(
+                    current_value, current_weight, x, y, band))
+            {
+                continue;
+            }
+
+            if (current_weight > largest_weight)
+            {
+                largest_weight = current_weight;
+                value = current_value;
+            }
+        }
+
+        if (largest_weight <= 0.0)
+        {
+            return false;
+        }
+
+        weight = largest_weight;
+        return true;
     }
 
     void CompositeData::set_interpolating(bool enable)

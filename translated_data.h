@@ -123,6 +123,12 @@ namespace rsvp
                                            double y,
                                            int band) const override;
 
+        bool get_clamped_pixel_double(double &value,
+                                      double &weight,
+                                      double x,
+                                      double y,
+                                      int band) const override;
+
         int get_bands() const override;
 
         /**

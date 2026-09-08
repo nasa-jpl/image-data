@@ -105,6 +105,79 @@ TEST(image_data_interpolation, get_interpolated_pixel_double_out_of_bounds)
     EXPECT_FALSE(img.get_interpolated_pixel_double(value, -1.0, -1.0, 0));
 }
 
+TEST(image_data_interpolation, get_interpolated_pixel_double_negative_fraction)
+{
+    InterpolationTestImage img;
+    double value = 0.0;
+
+    // A coordinate between -1 and 0 is outside the image: interpolating it
+    // would need the pixel at -1. Truncating toward zero used to leave the
+    // lower corner at 0 and mirror the interpolation about the edge, quietly
+    // returning the value from +0.75 and reporting success. That reflection is
+    // what put a bump along every seam of a tiled terrain.
+    EXPECT_FALSE(img.get_interpolated_pixel_double(value, -0.75, 0.0, 0));
+    EXPECT_FALSE(img.get_interpolated_pixel_double(value, 0.0, -0.75, 0));
+    EXPECT_FALSE(img.get_interpolated_pixel_double(value, -0.25, -0.25, 0));
+
+    // Well outside the image is still outside the image
+    EXPECT_FALSE(img.get_interpolated_pixel_double(value, -1.5, 0.0, 0));
+    EXPECT_FALSE(img.get_interpolated_pixel_double(value, 0.0, -1.5, 0));
+}
+
+TEST(image_data_interpolation, get_interpolated_pixel_double_last_pixel)
+{
+    InterpolationTestImage img;
+    double value = 0.0;
+
+    // Landing exactly on the last row or column needs no neighbor to the right
+    // or below, so it should not be rejected for lacking one.
+    EXPECT_TRUE(img.get_interpolated_pixel_double(value, 2.0, 2.0, 0));
+    EXPECT_NEAR(value, 9.0, 0.001);
+
+    EXPECT_TRUE(img.get_interpolated_pixel_double(value, 2.0, 0.5, 0));
+    EXPECT_NEAR(value, 4.5, 0.001); // Average of (2,0) = 3 and (2,1) = 6
+
+    EXPECT_TRUE(img.get_interpolated_pixel_double(value, 0.5, 2.0, 0));
+    EXPECT_NEAR(value, 7.5, 0.001); // Average of (0,2) = 7 and (1,2) = 8
+
+    // But any fraction past the last pixel is genuinely out of bounds
+    EXPECT_FALSE(img.get_interpolated_pixel_double(value, 2.25, 2.0, 0));
+    EXPECT_FALSE(img.get_interpolated_pixel_double(value, 2.0, 2.25, 0));
+}
+
+TEST(image_data_interpolation, get_clamped_pixel_double)
+{
+    InterpolationTestImage img;
+    double value = 0.0;
+    double weight = 0.0;
+
+    // Inside the image, nothing is clamped and the sample carries full weight
+    EXPECT_TRUE(img.get_clamped_pixel_double(value, weight, 0.5, 0.5, 0));
+    EXPECT_NEAR(value, 3.0, 0.001);
+    EXPECT_NEAR(weight, 1.0, 0.001);
+
+    // A quarter pixel off the left edge clamps to the edge and keeps 3/4 of a
+    // say in the answer
+    EXPECT_TRUE(img.get_clamped_pixel_double(value, weight, -0.25, 1.0, 0));
+    EXPECT_NEAR(value, 4.0, 0.001); // Pixel (0, 1)
+    EXPECT_NEAR(weight, 0.75, 0.001);
+
+    // Same past the far edge, which is at width - 1
+    EXPECT_TRUE(img.get_clamped_pixel_double(value, weight, 2.25, 1.0, 0));
+    EXPECT_NEAR(value, 6.0, 0.001); // Pixel (2, 1)
+    EXPECT_NEAR(weight, 0.75, 0.001);
+
+    // Off the corner, the weights of both axes apply
+    EXPECT_TRUE(img.get_clamped_pixel_double(value, weight, -0.5, -0.25, 0));
+    EXPECT_NEAR(value, 1.0, 0.001); // Pixel (0, 0)
+    EXPECT_NEAR(weight, 0.375, 0.001);
+
+    // A full pixel out or further, and the image has no say at all
+    EXPECT_FALSE(img.get_clamped_pixel_double(value, weight, -1.0, 1.0, 0));
+    EXPECT_FALSE(img.get_clamped_pixel_double(value, weight, 3.0, 1.0, 0));
+    EXPECT_FALSE(img.get_clamped_pixel_double(value, weight, -2.5, 1.0, 0));
+}
+
 TEST(image_data_interpolation, get_pixel_int)
 {
     InterpolationTestImage img;

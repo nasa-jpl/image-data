@@ -1017,11 +1017,19 @@ namespace rsvp
             }
         }
 
+        if (get_width() < 1 || get_height() < 1)
+        {
+            return bounds;
+        }
+
+        // Bounds describe the extent of the pixel centers, which is what the
+        // X_AXIS_MAXIMUM and Y_AXIS_MAXIMUM labels report: the last pixel is
+        // at (width - 1, height - 1), not (width, height).
         bounds.valid = true;
         bounds.min_x = x_min;
         bounds.min_y = y_min;
-        bounds.max_x = x_min + (get_width() * map_scale_x);
-        bounds.max_y = y_min + (get_height() * map_scale_y);
+        bounds.max_x = x_min + ((get_width() - 1) * map_scale_x);
+        bounds.max_y = y_min + ((get_height() - 1) * map_scale_y);
 
         return bounds;
     }

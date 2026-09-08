@@ -177,6 +177,32 @@ namespace rsvp
                                                    int band) const;
 
         /**
+         * @brief Sample the image with the request clamped to the nearest
+         * valid pixel, and report the weight that clamped sample deserves.
+         *
+         * Tiled mosaics - orbital DEMs in particular - abut without
+         * overlapping, so their pixel grids are continuous but each tile's
+         * pixels only span `width - 1` times the tile's pitch. There is
+         * therefore a one-pixel-wide band along every seam that no single tile
+         * can interpolate on its own. This method lets a composite reconstruct
+         * that band: each tile along the seam reports the value on its own
+         * edge plus the bilinear weight that edge is owed.
+         *
+         * @param[out] value  The value sampled at the clamped location.
+         * @param[out] weight The weight of `value`, in the range (0, 1]. It is
+         * 1 when (x, y) is inside the image, and falls off linearly to 0 a
+         * pixel outside of it.
+         * @param[in] x       The "x-like" coordinate of the pixel of interest
+         * @param[in] y       The "y-like" coordinate of the pixel of interest
+         * @param[in] band    The band of the pixel to access
+         *
+         * @return false if (x, y) is more than a pixel outside the image, or
+         * if the clamped sample itself is unavailable
+         */
+        virtual bool get_clamped_pixel_double(
+            double &value, double &weight, double x, double y, int band) const;
+
+        /**
          * @brief Get the uninterpolated pixel band value as an integer.
          *
          * The indexing standard used throughout these classes is (x, y)

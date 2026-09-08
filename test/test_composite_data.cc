@@ -1,8 +1,14 @@
 #include <composite_data.h>
 #include <platform.h>
+#include <translated_data.h>
+#include <vicar_data.h>
 
 #include <img_data_gtest/gtest.h>
 #include <test_utils/test_utils.h>
+
+#include <cmath>
+#include <fstream>
+#include <memory>
 
 #include "Config.h"
 
@@ -681,4 +687,343 @@ TEST(composite_data, composite_bounds)
     EXPECT_DOUBLE_EQ(bounds.max_x, 25.0);  // max from img2
     EXPECT_DOUBLE_EQ(bounds.min_y, 25.0);  // min from img2
     EXPECT_DOUBLE_EQ(bounds.max_y, 40.0);  // max from img1
+}
+namespace
+{
+    // A mosaic of abutting tiles, laid out the way orbital DEMs are.
+    //
+    // The tiles are cut out of one global grid of GRID_SIZE x GRID_SIZE pixels
+    // at a pitch of 1 world unit. Each tile is TILE_SIZE pixels square, so its
+    // pixel centers only span TILE_SIZE - 1 world units while its neighbor
+    // starts TILE_SIZE away: there is a one-unit-wide band along every seam
+    // that no single tile can interpolate on its own, because each of the four
+    // corners the band needs belongs to a different tile.
+    class SeamMosaic
+    {
+    public:
+        static const int TILE_SIZE = 4;
+        static const int TILES_PER_SIDE = 2;
+        static const int GRID_SIZE = TILE_SIZE * TILES_PER_SIDE;
+
+        // The heights the mosaic is cut from. Deliberately not a plane, so
+        // that getting the interpolation wrong shows up as a wrong value
+        // rather than as the right one by accident.
+        static double global_height(int x, int y)
+        {
+            return 0.25 * x * x - 1.5 * y + 0.1 * x * y + 3.0;
+        }
+
+        // What the mosaic should report at (x, y): bilinear interpolation over
+        // the global grid, which is what the tiles would produce if they had
+        // been left as a single image.
+        static bool expected(double &value, double x, double y)
+        {
+            const int x0 = static_cast<int>(std::floor(x));
+            const int y0 = static_cast<int>(std::floor(y));
+            const double frac_x = x - x0;
+            const double frac_y = y - y0;
+
+            value = 0.0;
+
+            for (int offset_x = 0; offset_x < 2; offset_x++)
+            {
+                for (int offset_y = 0; offset_y < 2; offset_y++)
+                {
+                    const double weight =
+                        (offset_x == 0 ? 1.0 - frac_x : frac_x) *
+                        (offset_y == 0 ? 1.0 - frac_y : frac_y);
+
+                    if (weight == 0.0)
+                    {
+                        continue;
+                    }
+
+                    const int pixel_x = x0 + offset_x;
+                    const int pixel_y = y0 + offset_y;
+
+                    if (pixel_x < 0 || pixel_x >= GRID_SIZE || pixel_y < 0 ||
+                        pixel_y >= GRID_SIZE)
+                    {
+                        return false;
+                    }
+
+                    value += weight * global_height(pixel_x, pixel_y);
+                }
+            }
+
+            return true;
+        }
+    };
+
+    // One tile of a SeamMosaic, shaped like a real heightmap tile: band 0 and
+    // band 1 hold heights, band 2 holds a fully-opaque alpha, and coordinates
+    // outside the tile are rejected outright.
+    class SeamTile : public rsvp::ImageData
+    {
+    private:
+        int origin_x;
+        int origin_y;
+
+    public:
+        SeamTile(int in_origin_x, int in_origin_y) :
+            origin_x(in_origin_x),
+            origin_y(in_origin_y)
+        {
+        }
+
+        int get_bands() const override
+        {
+            return 3;
+        }
+
+        int get_width() const override
+        {
+            return SeamMosaic::TILE_SIZE;
+        }
+
+        int get_height() const override
+        {
+            return SeamMosaic::TILE_SIZE;
+        }
+
+        bool
+        get_pixel_double(double &value, int x, int y, int band) const override
+        {
+            if (x < 0 || x >= get_width() || y < 0 || y >= get_height() ||
+                band < 0 || band >= get_bands())
+            {
+                return false;
+            }
+
+            if (band == 2)
+            {
+                value = 255.0;
+            }
+            else
+            {
+                value = SeamMosaic::global_height(origin_x + x, origin_y + y);
+            }
+
+            return true;
+        }
+    };
+
+    // Fill `composite` with the tiles of a SeamMosaic, each placed by a
+    // TranslatedData exactly as a .mod file would place it.
+    void build_seam_mosaic(rsvp::CompositeData &composite)
+    {
+        for (int tile_x = 0; tile_x < SeamMosaic::TILES_PER_SIDE; tile_x++)
+        {
+            for (int tile_y = 0; tile_y < SeamMosaic::TILES_PER_SIDE; tile_y++)
+            {
+                const int origin_x = tile_x * SeamMosaic::TILE_SIZE;
+                const int origin_y = tile_y * SeamMosaic::TILE_SIZE;
+
+                auto tile = std::make_shared<SeamTile>(origin_x, origin_y);
+                tile->set_alpha_band(2);
+
+                composite.add_image(std::make_shared<rsvp::TranslatedData>(
+                    tile, origin_x, origin_y, 1.0, 0.0));
+            }
+        }
+    }
+
+    // Check that `composite` matches the mosaic it was cut from everywhere
+    // along a line, seams included.
+    void expect_matches_mosaic(const rsvp::CompositeData &composite,
+                               double start_x,
+                               double start_y,
+                               double step_x,
+                               double step_y,
+                               int steps)
+    {
+        for (int i = 0; i <= steps; i++)
+        {
+            const double x = start_x + i * step_x;
+            const double y = start_y + i * step_y;
+
+            double reference = 0.0;
+            ASSERT_TRUE(SeamMosaic::expected(reference, x, y))
+                << "at (" << x << ", " << y << ")";
+
+            double value = 0.0;
+            EXPECT_TRUE(
+                composite.get_interpolated_pixel_double(value, x, y, 1))
+                << "at (" << x << ", " << y << ")";
+            EXPECT_NEAR(value, reference, 1e-12)
+                << "at (" << x << ", " << y << ")";
+        }
+    }
+}
+
+// Abutting tiles should interpolate across their seams, not around them.
+//
+// Each tile can only interpolate within its own pixels, so the band between
+// two tiles needs corners from both. Before this was handled, the tile on the
+// far side of the seam answered the whole band by mirroring its own edge,
+// which put a spurious ridge along every seam of an orbital terrain (see SSim
+// system test sol01964_bump).
+TEST(composite_data, first_valid_composite_data_seams)
+{
+    rsvp::FirstValidCompositeData composite;
+    build_seam_mosaic(composite);
+
+    const double last = SeamMosaic::GRID_SIZE - 1;
+
+    // Along a row, crossing the vertical seam between tile columns
+    expect_matches_mosaic(composite, 0.0, 1.5, 0.25, 0.0, 4 * last);
+
+    // Down a column, crossing the horizontal seam between tile rows
+    expect_matches_mosaic(composite, 1.5, 0.0, 0.0, 0.25, 4 * last);
+
+    // Diagonally through the point where four tiles meet
+    expect_matches_mosaic(composite, 0.0, 0.0, 0.25, 0.25, 4 * last);
+
+    // And along the seams themselves, where every sample is in the band
+    expect_matches_mosaic(composite, 3.5, 0.0, 0.0, 0.25, 4 * last);
+    expect_matches_mosaic(composite, 0.0, 3.5, 0.25, 0.0, 4 * last);
+}
+
+TEST(composite_data, alpha_blending_composite_data_seams)
+{
+    rsvp::AlphaBlendingCompositeData composite;
+    build_seam_mosaic(composite);
+
+    const double last = SeamMosaic::GRID_SIZE - 1;
+
+    expect_matches_mosaic(composite, 0.0, 1.5, 0.25, 0.0, 4 * last);
+    expect_matches_mosaic(composite, 1.5, 0.0, 0.0, 0.25, 4 * last);
+    expect_matches_mosaic(composite, 0.0, 0.0, 0.25, 0.25, 4 * last);
+    expect_matches_mosaic(composite, 3.5, 0.0, 0.0, 0.25, 4 * last);
+    expect_matches_mosaic(composite, 0.0, 3.5, 0.25, 0.0, 4 * last);
+}
+
+// Filling the seam band must not turn into extrapolating past the mosaic.
+TEST(composite_data, composite_data_seams_stop_at_the_mosaic_edge)
+{
+    rsvp::FirstValidCompositeData composite;
+    build_seam_mosaic(composite);
+
+    const double last = SeamMosaic::GRID_SIZE - 1;
+    double value = 0.0;
+
+    // The outer edges of the mosaic are still edges
+    EXPECT_TRUE(composite.get_interpolated_pixel_double(value, 0.0, 0.0, 1));
+    EXPECT_TRUE(composite.get_interpolated_pixel_double(value, last, last, 1));
+
+    EXPECT_FALSE(
+        composite.get_interpolated_pixel_double(value, -0.25, 0.0, 1));
+    EXPECT_FALSE(
+        composite.get_interpolated_pixel_double(value, 0.0, -0.25, 1));
+    EXPECT_FALSE(
+        composite.get_interpolated_pixel_double(value, last + 0.25, 0.0, 1));
+    EXPECT_FALSE(
+        composite.get_interpolated_pixel_double(value, 0.0, last + 0.25, 1));
+
+    // Well outside is still outside
+    EXPECT_FALSE(
+        composite.get_interpolated_pixel_double(value, -50.0, 0.0, 1));
+    EXPECT_FALSE(composite.get_interpolated_pixel_double(value, 0.0, 50.0, 1));
+
+    // Same for the scored composite, which fills seams by a different rule
+    rsvp::ScoredCompositeData scored;
+    build_seam_mosaic(scored);
+
+    EXPECT_TRUE(scored.get_interpolated_pixel_double(value, 3.5, 1.0, 1));
+    EXPECT_FALSE(scored.get_interpolated_pixel_double(value, -0.25, 1.0, 1));
+    EXPECT_FALSE(
+        scored.get_interpolated_pixel_double(value, last + 0.25, 1.0, 1));
+}
+
+// TranslatedData and VicarData bounds describe the extent of the pixel
+// centers, so the far corner is the last pixel rather than one pixel past it.
+TEST(composite_data, translated_data_bounds_span_the_pixel_centers)
+{
+    // SeamTile has no spatial labels of its own, so wrap something that does
+    class BoundedSeamTile : public SeamTile
+    {
+    public:
+        BoundedSeamTile() :
+            SeamTile(0, 0)
+        {
+        }
+
+        rsvp::TerrainBounds get_bounds() const override
+        {
+            rsvp::TerrainBounds bounds;
+            bounds.valid = true;
+            return bounds;
+        }
+    };
+
+    const double scale = 2.0;
+    const rsvp::TranslatedData translated(
+        std::make_shared<BoundedSeamTile>(), 100.0, -50.0, scale, 0.0);
+
+    const auto bounds = translated.get_bounds();
+    ASSERT_TRUE(bounds.valid);
+    EXPECT_DOUBLE_EQ(bounds.min_x, 100.0);
+    EXPECT_DOUBLE_EQ(bounds.min_y, -50.0);
+    EXPECT_DOUBLE_EQ(bounds.max_x,
+                     100.0 + (SeamMosaic::TILE_SIZE - 1) * scale);
+    EXPECT_DOUBLE_EQ(bounds.max_y,
+                     -50.0 + (SeamMosaic::TILE_SIZE - 1) * scale);
+}
+
+TEST(composite_data, vicar_data_bounds_span_the_pixel_centers)
+{
+    const int samples = 4;
+    const int lines = 3;
+    const double x_min = 100.0;
+    const double y_min = -50.0;
+    const double x_scale = 2.0;
+    const double y_scale = 4.0;
+
+    // The wedge tiles in test/terrain carry their geometry in the system label
+    // rather than in a SURFACE_PROJECTION_PARMS property, which is the only
+    // place VicarData::get_bounds looks, so synthesize a tile that has one.
+    // LBLSIZE has to be a whole number of RECSIZE records, and the label has
+    // to be padded out to it
+    const size_t label_size = 512;
+    std::string label =
+        "LBLSIZE=512  FORMAT='REAL'  TYPE='IMAGE'  BUFSIZ=16  DIM=3  EOL=0  "
+        "RECSIZE=16  ORG='BSQ'  NL=3  NS=4  NB=1  N1=4  N2=3  N3=1  N4=0  "
+        "NBB=0  NLB=0  HOST='LINUX'  INTFMT='LOW'  REALFMT='RIEEE'  "
+        "PROPERTY='SURFACE_PROJECTION_PARMS'  MAP_SCALE=(2.0, 4.0)  "
+        "X_AXIS_MINIMUM=100.0  Y_AXIS_MINIMUM=-50.0";
+    ASSERT_TRUE(label.size() <= label_size);
+    label.resize(label_size, ' ');
+
+    const std::string tmp_dir =
+        image_data::image_data_test_mkdtemp("/tmp/tmp.XXXXXX");
+    ASSERT_TRUE(tmp_dir.length() != 0);
+    const std::string tile_path = tmp_dir + "/bounds.ht";
+
+    {
+        std::ofstream tile_file(tile_path,
+                                std::ofstream::binary | std::ofstream::trunc);
+        tile_file << label;
+
+        for (int i = 0; i < samples * lines; i++)
+        {
+            const float height = static_cast<float>(i);
+            tile_file.write(reinterpret_cast<const char *>(&height),
+                            sizeof(height));
+        }
+    }
+
+    const auto tile = rsvp::VicarData::read_vicarfile(tile_path);
+    ASSERT_TRUE(tile != nullptr);
+    EXPECT_EQ(tile->get_width(), samples);
+    EXPECT_EQ(tile->get_height(), lines);
+
+    // Bounds run to the last pixel, not one pixel past it
+    const auto bounds = tile->get_bounds();
+    ASSERT_TRUE(bounds.valid);
+    EXPECT_DOUBLE_EQ(bounds.min_x, x_min);
+    EXPECT_DOUBLE_EQ(bounds.min_y, y_min);
+    EXPECT_DOUBLE_EQ(bounds.max_x, x_min + (samples - 1) * x_scale);
+    EXPECT_DOUBLE_EQ(bounds.max_y, y_min + (lines - 1) * y_scale);
+
+    ASSERT_TRUE(image_data::image_data_test_rm_directory(tmp_dir) == 0);
 }
