@@ -80,48 +80,73 @@ namespace rsvp
         }
 
         // We sample at (int_x, int_y) and (int_x+1, int_y+1), so those two
-        // must span the input. Floor rather than truncate - truncation rounds
-        // toward zero, which for coordinates in (-1, 0) would leave `int_x` at
-        // 0 and silently mirror the interpolation about the image edge instead
-        // of reporting that the coordinate is out of bounds.
-        const int int_x = static_cast<int>(std::floor(x));
-        const int int_y = static_cast<int>(std::floor(y));
+        // must span the input, which means rounding down rather than toward
+        // zero. Getting that wrong for coordinates in (-1, 0) - leaving the
+        // corner at 0 - is what used to mirror the interpolation about the
+        // image edge instead of reporting the coordinate out of bounds.
+        //
+        // Done by hand rather than with std::floor: this is the terrain
+        // settling hot path, and on 32-bit x86 without SSE4.1 there is no
+        // instruction to inline std::floor to, so it compiles to a libm call.
+        int int_x = static_cast<int>(x);
+        int int_y = static_cast<int>(y);
+
+        if (x < int_x)
+        {
+            int_x--;
+        }
+
+        if (y < int_y)
+        {
+            int_y--;
+        }
 
         const double frac_x = x - int_x;
         const double frac_y = y - int_y;
 
-        const double weights[2][2] = {
-            {(1.0 - frac_x) * (1.0 - frac_y), (1.0 - frac_x) * frac_y},
-            {frac_x * (1.0 - frac_y), frac_x * frac_y}};
+        // When a fraction is zero the far corner has zero weight, so it must not
+        // be required to exist - otherwise a coordinate landing exactly on the
+        // last row or column of an image would fail for want of a neighbor it
+        // does not need. Fold that in by collapsing the far corner onto the near
+        // one, which keeps the four fetches below unconditional.
+        const int far_x = (frac_x > 0.0) ? int_x + 1 : int_x;
+        const int far_y = (frac_y > 0.0) ? int_y + 1 : int_y;
 
-        double sum = 0.0;
-
-        for (int offset_x = 0; offset_x < 2; offset_x++)
+        // Upper left (x, y)
+        double ul = 0.0;
+        if (!get_pixel_double(ul, int_x, int_y, band))
         {
-            for (int offset_y = 0; offset_y < 2; offset_y++)
-            {
-                const double weight = weights[offset_x][offset_y];
-
-                if (weight == 0.0)
-                {
-                    // This corner contributes nothing, so do not require it to
-                    // exist. Without this, a coordinate landing exactly on the
-                    // last row or column of an image would fail.
-                    continue;
-                }
-
-                double corner = 0.0;
-                if (!get_pixel_double(
-                        corner, int_x + offset_x, int_y + offset_y, band))
-                {
-                    return false;
-                }
-
-                sum += weight * corner;
-            }
+            return false;
         }
+        const double ul_weight = (1.0 - frac_x) * (1.0 - frac_y);
 
-        value = sum;
+        // Upper right (x+1, y)
+        double ur = 0.0;
+        if (!get_pixel_double(ur, far_x, int_y, band))
+        {
+            return false;
+        }
+        const double ur_weight = frac_x * (1.0 - frac_y);
+
+        // Lower left (x, y+1)
+        double ll = 0.0;
+        if (!get_pixel_double(ll, int_x, far_y, band))
+        {
+            return false;
+        }
+        const double ll_weight = (1.0 - frac_x) * frac_y;
+
+        // Lower right (x+1, y+1)
+        double lr = 0.0;
+        if (!get_pixel_double(lr, far_x, far_y, band))
+        {
+            return false;
+        }
+        const double lr_weight = frac_x * frac_y;
+
+        // Perform bilinear interpolation
+        value =
+            ul * ul_weight + ur * ur_weight + ll * ll_weight + lr * lr_weight;
         return true;
     }
 
