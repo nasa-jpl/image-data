@@ -263,7 +263,20 @@ namespace rsvp
         }
 
         TerrainBounds underlying_bounds = transformed_image->get_bounds();
-        if (!underlying_bounds.valid)
+
+        // An image with a pixel grid does not need to know where it is for us
+        // to know where it is: our transform is what places its grid. Only
+        // when there is no grid to place do we have to fall back on what it
+        // says about itself.
+        //
+        // This matters for the wedge heightmaps a `ModData` mosaic is built
+        // from, which carry their placement as bare labels rather than in the
+        // projection group `VicarData` reads, and so report no bounds of their
+        // own. Deriving ours from the transform instead keeps the mosaic from
+        // being a composite whose children are all in unknown places.
+        const bool has_own_grid = get_width() >= 1 && get_height() >= 1;
+
+        if (!has_own_grid && !underlying_bounds.valid)
         {
             return underlying_bounds;
         }
@@ -275,7 +288,7 @@ namespace rsvp
         double last_sample = 0.0;
         double last_line = 0.0;
 
-        if (get_width() >= 1 && get_height() >= 1)
+        if (has_own_grid)
         {
             // The stored image has a pixel grid, so our extent is where that
             // grid lands. Bounds describe the extent of the pixel centers, so
