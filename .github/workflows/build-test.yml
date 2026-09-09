@@ -32,10 +32,15 @@ jobs:
       if: runner.os == 'Linux'
       run: |
         # The runner image ships a Google Chrome apt repo that intermittently
-        # serves a Packages.gz disagreeing with its own Release hashes, which
-        # fails the whole update. Nothing here comes from it.
-        sudo rm -f /etc/apt/sources.list.d/google-chrome*.list
-        sudo apt-get update
+        # serves a Packages index disagreeing with its own Release hashes,
+        # which fails the whole update. Nothing here comes from it, so drop
+        # every sources file naming it, whatever extension it uses. Ignore a
+        # remaining update failure too: the Ubuntu indexes cmake and ninja
+        # come from are fetched before any third-party one can break things,
+        # and a genuinely missing package still fails the install below.
+        sudo grep -rl dl.google.com /etc/apt/sources.list.d |
+            xargs -r sudo rm -f
+        sudo apt-get update || true
         sudo apt-get install -y cmake ninja-build
 
     - name: Cache build directory
