@@ -127,11 +127,17 @@ namespace rsvp
         const double frac_x = x - int_x;
         const double frac_y = y - int_y;
 
-        // When a fraction is zero the far corner has zero weight, so it must not
-        // be required to exist - otherwise a coordinate landing exactly on the
-        // last row or column of an image would fail for want of a neighbor it
-        // does not need. Fold that in by collapsing the far corner onto the near
-        // one, which keeps the four fetches below unconditional.
+        // When a fraction is zero the far corner has zero weight, so it must
+        // not be required to exist - otherwise a coordinate landing exactly on
+        // the last row or column of an image would fail for want of a neighbor
+        // it does not need. Fold that in by collapsing the far corner onto the
+        // near one, which keeps the four fetches below unconditional.
+        //
+        // Two cheaper-looking alternatives measure worse, so leave this alone:
+        // branching on the fractions costs a pair of unpredictable branches
+        // per call (and comparing a double against zero costs two branches,
+        // not one), and letting a weightless fetch fail instead stops the
+        // compiler short-circuiting the weight test.
         const int far_x = (frac_x > 0.0) ? int_x + 1 : int_x;
         const int far_y = (frac_y > 0.0) ? int_y + 1 : int_y;
 
