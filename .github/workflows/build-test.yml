@@ -31,6 +31,10 @@ jobs:
     - name: Install dependencies (Ubuntu)
       if: runner.os == 'Linux'
       run: |
+        # The runner image ships a Google Chrome apt repo that intermittently
+        # serves a Packages.gz disagreeing with its own Release hashes, which
+        # fails the whole update. Nothing here comes from it.
+        sudo rm -f /etc/apt/sources.list.d/google-chrome*.list
         sudo apt-get update
         sudo apt-get install -y cmake ninja-build
 
