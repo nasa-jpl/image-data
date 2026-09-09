@@ -28,10 +28,12 @@ namespace rsvp
     unsigned long geometry_version();
 
     /**
-     * @brief Invalidate every cache derived from where images sit.
+     * @brief Invalidate every cache derived from where images sit and how
+     * their bands are laid out.
      *
-     * Call this from anything that changes the placement or the membership of
-     * an image: setting a transform, or adding an image to a container.
+     * Call this from anything that changes the placement, the membership or
+     * the band layout of an image: setting a transform, adding an image to a
+     * container, or setting an alpha band.
      *
      * @see geometry_version
      */

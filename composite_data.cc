@@ -2,6 +2,8 @@
 
 #include <stdexcept>
 
+#include <algorithm>
+#include <cstddef>
 #include <limits>
 #include <list>
 
@@ -143,12 +145,14 @@ namespace rsvp
         double weighted_sum = 0.0;
         double summed_alpha = 0.0;
 
+        const std::vector<ChildGeometry> &children = child_geometry();
+
         for (int i = 0; i < get_count(); i++)
         {
             double height = 0.0;
             double alpha = 0.0;
 
-            if (images.at(i)->get_bands() == 1)
+            if (children.at(i).bands == 1)
             {
                 // Usually we composite `VicarData` images, which have three
                 // bands (raw, interpolated, alpha), but we also want to
@@ -171,8 +175,7 @@ namespace rsvp
                 // image
                 continue;
             }
-            else if (const int band_with_alpha =
-                         get_alpha_band_of(*images.at(i));
+            else if (const int band_with_alpha = children.at(i).alpha_band;
                      band_with_alpha < 0)
             {
                 // Nothing to say how opaque it is, so just call it opaque.
@@ -245,12 +248,14 @@ namespace rsvp
         double total_alpha = 0.0;
         value = 0.0;
 
+        const std::vector<ChildGeometry> &children = child_geometry();
+
         for (int i = 0; i < get_count(); i++)
         {
             double current_height = 0.0;
             double current_alpha = 0.0;
 
-            if (images.at(i)->get_bands() == 1)
+            if (children.at(i).bands == 1)
             {
                 // Usually we composite `VicarData` images, which have three
                 // bands (raw, interpolated, alpha), but we also want to
@@ -281,7 +286,7 @@ namespace rsvp
                 }
 
                 // Get the alpha value
-                const int band_with_alpha = get_alpha_band_of(*images.at(i));
+                const int band_with_alpha = children.at(i).alpha_band;
 
                 if (band_with_alpha < 0)
                 {
@@ -418,8 +423,18 @@ namespace rsvp
         double summed_weight = 0.0;
         double nearest_value = 0.0;
 
+        const std::vector<ChildGeometry> &children = child_geometry();
+
         for (int i = 0; i < get_count(); i++)
         {
+            const auto &image = images.at(i);
+
+            // Only the images flanking the seam have a say
+            if (!image || !child_may_reach(children.at(i), x, y))
+            {
+                continue;
+            }
+
             double current_value = 0.0;
             double current_weight = 0.0;
 
@@ -427,7 +442,7 @@ namespace rsvp
             // composite takes the best-scoring image everywhere else without
             // ruling out low scores, and a seam should look like the rest of
             // the composite rather than follow a stricter rule of its own.
-            if (!images.at(i)->get_clamped_pixel_double(
+            if (!image->get_clamped_pixel_double(
                     current_value, current_weight, x, y, b))
             {
                 continue;
@@ -453,30 +468,95 @@ namespace rsvp
         return true;
     }
 
-    const TerrainBounds &CompositeData::merged_bounds() const
+    double CompositeData::get_clamp_reach_of(const ImageData &image,
+                                             const TerrainBounds &bounds)
+    {
+        if (!bounds.valid)
+        {
+            return 0.0;
+        }
+
+        const int width = image.get_width();
+        const int height = image.get_height();
+
+        if (width < 2 || height < 2)
+        {
+            // Nothing to measure a pixel against. An image with no grid of its
+            // own is a container of images that are already placed, and how
+            // far past its edge it can still reach is a question for whichever
+            // of those the point is near.
+            return 0.0;
+        }
+
+        // A clamped sample reaches one of the image's own pixels past its
+        // edge, so the reach we want is that pixel's pitch in our coordinates.
+        //
+        // Bounds are axis-aligned, so for a rotated image each span covers
+        // more ground than the pitch along that axis. Taking the larger of the
+        // two estimates is therefore never short of the true pitch, whatever
+        // the rotation, and erring long only costs us a cull we could have
+        // made.
+        return std::max(bounds.get_width() / (width - 1),
+                        bounds.get_height() / (height - 1));
+    }
+
+    void CompositeData::refresh_geometry_cache() const
     {
         const unsigned long version = geometry_version();
 
-        if (cached_bounds_version == version)
+        if (cached_geometry_version == version)
         {
-            return cached_bounds;
+            return;
         }
 
         TerrainBounds combined_bounds;
 
-        for (const auto &image : images)
+        cached_children.clear();
+        cached_children.resize(images.size());
+
+        for (size_t i = 0; i < images.size(); i++)
         {
-            if (image)
+            const auto &image = images.at(i);
+
+            if (!image)
             {
-                TerrainBounds image_bounds = image->get_bounds();
-                combined_bounds.merge(image_bounds);
+                // Leave the entry at its defaults so the indices still line up
+                continue;
             }
+
+            ChildGeometry &info = cached_children.at(i);
+
+            info.bounds = image->get_bounds();
+            info.clamp_reach = get_clamp_reach_of(*image, info.bounds);
+            info.bands = image->get_bands();
+            info.alpha_band = get_alpha_band_of(*image);
+
+            combined_bounds.merge(info.bounds);
         }
 
         cached_bounds = combined_bounds;
-        cached_bounds_version = version;
+        cached_geometry_version = version;
+    }
+
+    const TerrainBounds &CompositeData::merged_bounds() const
+    {
+        // Only for the side effect of refilling the cache the bounds live in
+        child_geometry();
 
         return cached_bounds;
+    }
+
+    bool CompositeData::child_may_reach(const ChildGeometry &info,
+                                        const double x,
+                                        const double y)
+    {
+        if (!info.bounds.valid || info.clamp_reach <= 0.0)
+        {
+            // Nothing known about the child, so nothing ruled out
+            return true;
+        }
+
+        return info.bounds.contains(x, y, info.clamp_reach + bounds_margin);
     }
 
     TerrainBounds CompositeData::get_bounds() const
@@ -523,6 +603,7 @@ namespace rsvp
     }
 
     bool CompositeData::get_seam_sample(const ImageData &image,
+                                        const ChildGeometry &info,
                                         double &value,
                                         double &weight,
                                         const double x,
@@ -536,7 +617,7 @@ namespace rsvp
             return false;
         }
 
-        const int band_with_alpha = get_alpha_band_of(image);
+        const int band_with_alpha = info.alpha_band;
 
         if (band_with_alpha < 0)
         {
@@ -570,13 +651,25 @@ namespace rsvp
         double weighted_sum = 0.0;
         double summed_weight = 0.0;
 
-        for (const auto &image : images)
+        const std::vector<ChildGeometry> &children = child_geometry();
+
+        for (size_t i = 0; i < images.size(); i++)
         {
+            const auto &image = images.at(i);
+            const ChildGeometry &info = children.at(i);
+
+            // Only the one or two images flanking the seam have a say, so rule
+            // the rest out before walking down into them
+            if (!image || !child_may_reach(info, x, y))
+            {
+                continue;
+            }
+
             double current_value = 0.0;
             double current_weight = 0.0;
 
             if (!get_seam_sample(
-                    *image, current_value, current_weight, x, y, band))
+                    *image, info, current_value, current_weight, x, y, band))
             {
                 continue;
             }
@@ -612,8 +705,18 @@ namespace rsvp
         // edge of whichever child lies nearest to it.
         double largest_weight = 0.0;
 
-        for (const auto &image : images)
+        const std::vector<ChildGeometry> &children = child_geometry();
+
+        for (size_t i = 0; i < images.size(); i++)
         {
+            const auto &image = images.at(i);
+
+            // Only a child within a pixel of (x, y) can be the nearest one
+            if (!image || !child_may_reach(children.at(i), x, y))
+            {
+                continue;
+            }
+
             double current_value = 0.0;
             double current_weight = 0.0;
 

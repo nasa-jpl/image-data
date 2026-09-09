@@ -279,6 +279,10 @@ namespace rsvp
     void ImageData::set_alpha_band(int band)
     {
         alpha_band = band;
+
+        // A container caches which band of each child carries alpha, and that
+        // answer just changed
+        invalidate_geometry();
     }
 
     int ImageData::get_alpha_band() const
