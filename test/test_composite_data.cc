@@ -6,9 +6,12 @@
 #include <img_data_gtest/gtest.h>
 #include <test_utils/test_utils.h>
 
+#include <atomic>
 #include <cmath>
 #include <fstream>
 #include <memory>
+#include <thread>
+#include <vector>
 
 #include "Config.h"
 
@@ -891,4 +894,111 @@ TEST(composite_data, undeclared_alpha_band_still_governs_seams)
     // Which matches what it does away from the seam
     EXPECT_FALSE(
         transparent.get_interpolated_pixel_double(value, 1.5, 1.5, 1));
+}
+
+// A composite remembers what it knows about each child, and works that out on
+// the first lookup that needs it rather than up front. Callers sample terrain
+// from more than one thread at a time - SSim runs one thread per core inside
+// its range-image simulation - so those lookups race with each other, and any
+// image anywhere moving invalidates the cache underneath them.
+//
+// Refilling the cache in place used to leave a reader indexing a vector that
+// another thread had just emptied, which surfaced as std::out_of_range from
+// the middle of a drive, or as a corrupted heap when two threads reallocated
+// it at once.
+TEST(composite_data, concurrent_lookups_survive_invalidation)
+{
+    rsvp::AlphaBlendingCompositeData composite;
+    build_seam_mosaic(composite);
+
+    const int num_threads = 8;
+    const int num_rounds = 200;
+    const double last = SeamMosaic::GRID_SIZE - 1;
+    const double row_y = 1.5;
+
+    std::atomic<int> round {0};
+    std::atomic<int> finished {0};
+    std::atomic<bool> stopping {false};
+    std::atomic<int> thrown {0};
+    std::atomic<int> wrong_values {0};
+
+    std::vector<std::thread> threads;
+
+    for (int t = 0; t < num_threads; t++)
+    {
+        threads.emplace_back([&] {
+            int current_round = 0;
+
+            while (true)
+            {
+                // Wait for the round to open, so that every thread meets the
+                // freshly invalidated cache at once
+                while (round.load() == current_round && !stopping.load())
+                {
+                    std::this_thread::yield();
+                }
+
+                if (stopping.load())
+                {
+                    return;
+                }
+
+                current_round = round.load();
+
+                try
+                {
+                    // A quarter of a pixel at a time, so that tile interiors,
+                    // seams and the outer edge all get sampled
+                    for (double x = 0.0; x <= last; x += 0.25)
+                    {
+                        double value = 0.0;
+                        double reference = 0.0;
+
+                        if (!composite.get_interpolated_pixel_double(
+                                value, x, row_y, 1) ||
+                            !SeamMosaic::expected(reference, x, row_y) ||
+                            std::fabs(value - reference) > 1e-12)
+                        {
+                            // A torn read gives a wrong answer rather than
+                            // throwing, so the values matter as much as
+                            // getting through at all
+                            wrong_values.fetch_add(1);
+                        }
+                    }
+                }
+                catch (const std::exception &)
+                {
+                    thrown.fetch_add(1);
+                }
+
+                finished.fetch_add(1);
+            }
+        });
+    }
+
+    for (int r = 1; r <= num_rounds; r++)
+    {
+        // Stands in for a terrain being placed or added, which is what
+        // invalidates the cache in SSim
+        rsvp::invalidate_geometry();
+
+        finished.store(0);
+        round.store(r);
+
+        while (finished.load() < num_threads)
+        {
+            std::this_thread::yield();
+        }
+    }
+
+    stopping.store(true);
+    round.fetch_add(1);
+
+    for (auto &thread : threads)
+    {
+        thread.join();
+    }
+
+    EXPECT_EQ(thrown.load(), 0);
+    EXPECT_EQ(wrong_values.load(), 0);
 }

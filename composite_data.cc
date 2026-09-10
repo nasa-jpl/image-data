@@ -6,6 +6,8 @@
 #include <cstddef>
 #include <limits>
 #include <list>
+#include <memory>
+#include <mutex>
 
 
 namespace rsvp
@@ -30,6 +32,21 @@ namespace rsvp
         // disagreement and many below the pitch of any real terrain, so it
         // cannot hide a seam either.
         const double bounds_margin = 1e-6;
+
+        bool same_bounds(const TerrainBounds &first,
+                         const TerrainBounds &second)
+        {
+            if (!first.valid || !second.valid)
+            {
+                // Nothing is known about where an invalid bounds sits, so two
+                // of them are only interchangeable if neither is valid
+                return first.valid == second.valid;
+            }
+
+            return first.min_x == second.min_x &&
+                first.max_x == second.max_x && first.min_y == second.min_y &&
+                first.max_y == second.max_y;
+        }
     }
 
     CompositeData::CompositeData() = default;
@@ -500,19 +517,55 @@ namespace rsvp
                         bounds.get_height() / (height - 1));
     }
 
-    void CompositeData::refresh_geometry_cache() const
+    bool CompositeData::describes_same_geometry(const GeometrySnapshot &first,
+                                                const GeometrySnapshot &second)
     {
-        const unsigned long version = geometry_version();
-
-        if (cached_geometry_version == version)
+        if (first.children.size() != second.children.size() ||
+            !same_bounds(first.bounds, second.bounds))
         {
-            return;
+            return false;
         }
 
-        TerrainBounds combined_bounds;
+        for (size_t i = 0; i < first.children.size(); i++)
+        {
+            const ChildGeometry &one = first.children.at(i);
+            const ChildGeometry &other = second.children.at(i);
 
-        cached_children.clear();
-        cached_children.resize(images.size());
+            if (one.bands != other.bands ||
+                one.alpha_band != other.alpha_band ||
+                one.clamp_reach != other.clamp_reach ||
+                !same_bounds(one.bounds, other.bounds))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    const CompositeData::GeometrySnapshot &
+    CompositeData::refresh_geometry_cache() const
+    {
+        // Lookups read a published snapshot without locking, so this only has
+        // to keep two threads from working one out at the same time.
+        const std::lock_guard<std::mutex> lock(geometry_mutex);
+
+        const GeometrySnapshot *published =
+            published_geometry.load(std::memory_order_relaxed);
+
+        const unsigned long version = geometry_version();
+
+        if (published != nullptr &&
+            published->version.load(std::memory_order_relaxed) == version)
+        {
+            // Another thread worked this version out while we waited
+            return *published;
+        }
+
+        const auto snapshot = std::make_shared<GeometrySnapshot>();
+
+        snapshot->children.resize(images.size());
+        snapshot->version.store(version, std::memory_order_relaxed);
 
         for (size_t i = 0; i < images.size(); i++)
         {
@@ -524,26 +577,37 @@ namespace rsvp
                 continue;
             }
 
-            ChildGeometry &info = cached_children.at(i);
+            ChildGeometry &info = snapshot->children.at(i);
 
             info.bounds = image->get_bounds();
             info.clamp_reach = get_clamp_reach_of(*image, info.bounds);
             info.bands = image->get_bands();
             info.alpha_band = get_alpha_band_of(*image);
 
-            combined_bounds.merge(info.bounds);
+            snapshot->bounds.merge(info.bounds);
         }
 
-        cached_bounds = combined_bounds;
-        cached_geometry_version = version;
-    }
+        if (published != nullptr &&
+            describes_same_geometry(*published, *snapshot))
+        {
+            // The version counter is global, so most of what invalidates a
+            // cache is some other image moving. Restamp the snapshot lookups
+            // are already reading rather than retiring it for an identical
+            // one, which keeps them off this slow path without adding to what
+            // `retained_geometry` has to hold on to.
+            published->version.store(version, std::memory_order_relaxed);
 
-    const TerrainBounds &CompositeData::merged_bounds() const
-    {
-        // Only for the side effect of refilling the cache the bounds live in
-        child_geometry();
+            return *published;
+        }
 
-        return cached_bounds;
+        // Own it before pointing lookups at it, and keep owning it afterwards:
+        // a lookup that has already loaded the previous snapshot is still
+        // reading it, and nothing here can tell when it has stopped.
+        retained_geometry.push_back(snapshot);
+
+        published_geometry.store(snapshot.get(), std::memory_order_release);
+
+        return *snapshot;
     }
 
     bool CompositeData::child_may_reach(const ChildGeometry &info,
