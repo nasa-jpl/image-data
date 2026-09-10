@@ -896,6 +896,109 @@ TEST(composite_data, undeclared_alpha_band_still_governs_seams)
         transparent.get_interpolated_pixel_double(value, 1.5, 1.5, 1));
 }
 
+namespace
+{
+    const int num_sampling_threads = 8;
+
+    // Sample the composite across a row of the mosaic it was cut from, and
+    // check every answer against that mosaic.
+    //
+    // A torn read gives a wrong answer rather than throwing, so the values
+    // matter as much as getting through at all.
+    void sample_seam_row(const rsvp::CompositeData &composite,
+                         std::atomic<int> &thrown,
+                         std::atomic<int> &wrong_values)
+    {
+        const double last = SeamMosaic::GRID_SIZE - 1;
+        const double row_y = 1.5;
+
+        try
+        {
+            // A quarter of a pixel at a time, so that tile interiors, seams
+            // and the outer edge all get sampled
+            for (double x = 0.0; x <= last; x += 0.25)
+            {
+                double value = 0.0;
+                double reference = 0.0;
+
+                if (!composite.get_interpolated_pixel_double(
+                        value, x, row_y, 1) ||
+                    !SeamMosaic::expected(reference, x, row_y) ||
+                    std::fabs(value - reference) > 1e-12)
+                {
+                    wrong_values.fetch_add(1);
+                }
+            }
+        }
+        catch (const std::exception &)
+        {
+            thrown.fetch_add(1);
+        }
+    }
+
+    // A child that sits wherever an atomic says it does.
+    //
+    // Moving a real image means writing the plain doubles inside its
+    // TranslatedData, which races with any lookup already walking into it -
+    // whatever the geometry cache does - and a test built on that could not
+    // tell a cache bug from that race. This moves on a single atomic store
+    // instead, so a test can move it out from under a lookup and hold the
+    // cache alone responsible for what comes back.
+    //
+    // It reports where it sits and nothing else: every sample of it fails, so
+    // it changes where this composite's children sit without changing any of
+    // the values the composite gives back.
+    class RelocatableTile final : public rsvp::ImageData
+    {
+    private:
+        std::atomic<int> origin {0};
+
+    public:
+        /// Move the tile, as placing an image does.
+        void move_to(int new_origin)
+        {
+            origin.store(new_origin);
+            rsvp::invalidate_geometry();
+        }
+
+        int get_bands() const override
+        {
+            return 3;
+        }
+
+        int get_width() const override
+        {
+            return 2;
+        }
+
+        int get_height() const override
+        {
+            return 2;
+        }
+
+        rsvp::TerrainBounds get_bounds() const override
+        {
+            const double at = origin.load();
+
+            rsvp::TerrainBounds bounds;
+            bounds.valid = true;
+            bounds.min_x = at;
+            bounds.min_y = at;
+            bounds.max_x = at + 1;
+            bounds.max_y = at + 1;
+            return bounds;
+        }
+
+        bool get_pixel_double(double & /*value*/,
+                              int /*x*/,
+                              int /*y*/,
+                              int /*band*/) const override
+        {
+            return false;
+        }
+    };
+}
+
 // A composite remembers what it knows about each child, and works that out on
 // the first lookup that needs it rather than up front. Callers sample terrain
 // from more than one thread at a time - SSim runs one thread per core inside
@@ -906,15 +1009,17 @@ TEST(composite_data, undeclared_alpha_band_still_governs_seams)
 // another thread had just emptied, which surfaced as std::out_of_range from
 // the middle of a drive, or as a corrupted heap when two threads reallocated
 // it at once.
+//
+// This covers an invalidation that leaves this composite's own geometry alone,
+// which is what almost all of them are: the version counter is global, so
+// every composite's cache is invalidated by any image anywhere moving. See
+// concurrent_lookups_survive_a_moved_child for one of its own children moving.
 TEST(composite_data, concurrent_lookups_survive_invalidation)
 {
     rsvp::AlphaBlendingCompositeData composite;
     build_seam_mosaic(composite);
 
-    const int num_threads = 8;
     const int num_rounds = 200;
-    const double last = SeamMosaic::GRID_SIZE - 1;
-    const double row_y = 1.5;
 
     std::atomic<int> round {0};
     std::atomic<int> finished {0};
@@ -924,7 +1029,7 @@ TEST(composite_data, concurrent_lookups_survive_invalidation)
 
     std::vector<std::thread> threads;
 
-    for (int t = 0; t < num_threads; t++)
+    for (int t = 0; t < num_sampling_threads; t++)
     {
         threads.emplace_back([&] {
             int current_round = 0;
@@ -945,31 +1050,7 @@ TEST(composite_data, concurrent_lookups_survive_invalidation)
 
                 current_round = round.load();
 
-                try
-                {
-                    // A quarter of a pixel at a time, so that tile interiors,
-                    // seams and the outer edge all get sampled
-                    for (double x = 0.0; x <= last; x += 0.25)
-                    {
-                        double value = 0.0;
-                        double reference = 0.0;
-
-                        if (!composite.get_interpolated_pixel_double(
-                                value, x, row_y, 1) ||
-                            !SeamMosaic::expected(reference, x, row_y) ||
-                            std::fabs(value - reference) > 1e-12)
-                        {
-                            // A torn read gives a wrong answer rather than
-                            // throwing, so the values matter as much as
-                            // getting through at all
-                            wrong_values.fetch_add(1);
-                        }
-                    }
-                }
-                catch (const std::exception &)
-                {
-                    thrown.fetch_add(1);
-                }
+                sample_seam_row(composite, thrown, wrong_values);
 
                 finished.fetch_add(1);
             }
@@ -978,14 +1059,14 @@ TEST(composite_data, concurrent_lookups_survive_invalidation)
 
     for (int r = 1; r <= num_rounds; r++)
     {
-        // Stands in for a terrain being placed or added, which is what
-        // invalidates the cache in SSim
+        // Stands in for some other image being placed, which invalidates every
+        // composite's cache without moving any of this one's children
         rsvp::invalidate_geometry();
 
         finished.store(0);
         round.store(r);
 
-        while (finished.load() < num_threads)
+        while (finished.load() < num_sampling_threads)
         {
             std::this_thread::yield();
         }
@@ -1001,4 +1082,83 @@ TEST(composite_data, concurrent_lookups_survive_invalidation)
 
     EXPECT_EQ(thrown.load(), 0);
     EXPECT_EQ(wrong_values.load(), 0);
+}
+
+// One of the composite's own children moving, rather than some unrelated
+// image, which is the case the cache cannot answer by restamping what it
+// already published: it has to work out a new snapshot and point lookups at it
+// while other threads are still reading the old one.
+//
+// The move deliberately lands mid-lookup rather than between rounds. A thread
+// that has already loaded the previous snapshot goes on reading it after it
+// has been retired, so retiring one must not free it, and the two must not be
+// mixed within a single lookup.
+TEST(composite_data, concurrent_lookups_survive_a_moved_child)
+{
+    rsvp::AlphaBlendingCompositeData composite;
+    build_seam_mosaic(composite);
+
+    // Somewhere no sample lands, so that where it sits is all it contributes
+    const int stray_origin = 1000;
+
+    const auto stray = std::make_shared<RelocatableTile>();
+    stray->move_to(stray_origin);
+    composite.add_image(stray);
+
+    // Enough moves to retire a snapshot many times over, and few enough that
+    // holding on to every one of them stays cheap
+    const int num_moves = 2000;
+
+    std::atomic<bool> stopping {false};
+    std::atomic<int> thrown {0};
+    std::atomic<int> wrong_values {0};
+    std::atomic<int> passes {0};
+
+    std::vector<std::thread> threads;
+
+    for (int t = 0; t < num_sampling_threads; t++)
+    {
+        threads.emplace_back([&] {
+            while (!stopping.load())
+            {
+                sample_seam_row(composite, thrown, wrong_values);
+                passes.fetch_add(1);
+            }
+        });
+    }
+
+    // Let every thread get as far as a lookup before moving anything, so that
+    // the moves land on a cache that is being read rather than on an idle one
+    while (passes.load() < num_sampling_threads)
+    {
+        std::this_thread::yield();
+    }
+
+    const int passes_before_moves = passes.load();
+
+    for (int move = 1; move <= num_moves; move++)
+    {
+        stray->move_to(stray_origin + move);
+        std::this_thread::yield();
+    }
+
+    // If the readers had stopped, the moves above would have landed on nothing
+    // and this test would be checking nothing
+    EXPECT_GT(passes.load(), passes_before_moves);
+
+    stopping.store(true);
+
+    for (auto &thread : threads)
+    {
+        thread.join();
+    }
+
+    EXPECT_EQ(thrown.load(), 0);
+    EXPECT_EQ(wrong_values.load(), 0);
+
+    // The moved child is still where it was left, and still says nothing about
+    // any of the values
+    EXPECT_EQ(composite.get_bounds().max_x, stray_origin + num_moves + 1);
+    expect_matches_mosaic(
+        composite, 0.0, 1.5, 0.25, 0.0, 4 * (SeamMosaic::GRID_SIZE - 1));
 }

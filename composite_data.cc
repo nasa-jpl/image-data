@@ -162,7 +162,10 @@ namespace rsvp
         double weighted_sum = 0.0;
         double summed_alpha = 0.0;
 
-        const std::vector<ChildGeometry> &children = child_geometry();
+        // Resolved once, so that the seam fallback below answers from the same
+        // placement of the children that this loop blended
+        const GeometrySnapshot &snapshot = geometry();
+        const std::vector<ChildGeometry> &children = snapshot.children;
 
         for (int i = 0; i < get_count(); i++)
         {
@@ -224,7 +227,7 @@ namespace rsvp
         {
             // ...unless (x, y) lands in the band between abutting images,
             // which none of them can interpolate on its own.
-            return get_seam_pixel_double(value, x, y, b);
+            return get_seam_pixel_double(value, snapshot, x, y, b);
         }
         else
         {
@@ -265,7 +268,10 @@ namespace rsvp
         double total_alpha = 0.0;
         value = 0.0;
 
-        const std::vector<ChildGeometry> &children = child_geometry();
+        // Resolved once, so that the seam fallback below answers from the same
+        // placement of the children that this loop blended
+        const GeometrySnapshot &snapshot = geometry();
+        const std::vector<ChildGeometry> &children = snapshot.children;
 
         for (int i = 0; i < get_count(); i++)
         {
@@ -369,7 +375,7 @@ namespace rsvp
 
         // No image covers (x, y). It may still land in the band between
         // abutting images, which none of them can interpolate on its own.
-        return get_seam_pixel_double(value, x, y, b);
+        return get_seam_pixel_double(value, snapshot, x, y, b);
     }
 
     bool ScoredCompositeData::get_pixel_double(double &value,
@@ -427,7 +433,9 @@ namespace rsvp
 
         // No image covers (x, y). It may still land in the band between
         // abutting images, which none of them can interpolate on its own.
-        if (!could_be_on_seam(x, y))
+        const GeometrySnapshot &snapshot = geometry();
+
+        if (!could_be_on_seam(snapshot, x, y))
         {
             return false;
         }
@@ -440,7 +448,7 @@ namespace rsvp
         double summed_weight = 0.0;
         double nearest_value = 0.0;
 
-        const std::vector<ChildGeometry> &children = child_geometry();
+        const std::vector<ChildGeometry> &children = snapshot.children;
 
         for (int i = 0; i < get_count(); i++)
         {
@@ -625,10 +633,12 @@ namespace rsvp
 
     TerrainBounds CompositeData::get_bounds() const
     {
-        return merged_bounds();
+        return geometry().bounds;
     }
 
-    bool CompositeData::could_be_on_seam(const double x, const double y) const
+    bool CompositeData::could_be_on_seam(const GeometrySnapshot &snapshot,
+                                         const double x,
+                                         const double y) const
     {
         // It takes two images to have a band between them
         if (get_count() < 2)
@@ -639,7 +649,7 @@ namespace rsvp
         // Seams run between the images, so a point beyond the outer edge of
         // all of them is not on one. Images that do not know where they are
         // leave the bounds invalid, and then this rules nothing out.
-        const TerrainBounds &bounds = merged_bounds();
+        const TerrainBounds &bounds = snapshot.bounds;
 
         return !bounds.valid || bounds.contains(x, y, bounds_margin);
     }
@@ -703,11 +713,12 @@ namespace rsvp
     }
 
     bool CompositeData::get_seam_pixel_double(double &value,
+                                              const GeometrySnapshot &snapshot,
                                               const double x,
                                               const double y,
                                               const int band) const
     {
-        if (!could_be_on_seam(x, y))
+        if (!could_be_on_seam(snapshot, x, y))
         {
             return false;
         }
@@ -715,7 +726,7 @@ namespace rsvp
         double weighted_sum = 0.0;
         double summed_weight = 0.0;
 
-        const std::vector<ChildGeometry> &children = child_geometry();
+        const std::vector<ChildGeometry> &children = snapshot.children;
 
         for (size_t i = 0; i < images.size(); i++)
         {
@@ -769,7 +780,7 @@ namespace rsvp
         // edge of whichever child lies nearest to it.
         double largest_weight = 0.0;
 
-        const std::vector<ChildGeometry> &children = child_geometry();
+        const std::vector<ChildGeometry> &children = geometry().children;
 
         for (size_t i = 0; i < images.size(); i++)
         {
