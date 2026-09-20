@@ -7,6 +7,7 @@
 #include <limits>
 #include <memory>
 #include <mutex>
+#include <string>
 
 
 namespace rsvp
@@ -601,14 +602,25 @@ namespace rsvp
             return true;
         }
 
-        // The value and its alpha from one walk down the child. A valid data
-        // value but no alpha value at this pixel means the alpha band was
-        // declared out of range; treat that as no data.
+        // The value and its alpha from one walk down the child
         const int bands[2] = {band, info.alpha_band};
         double sampled[2] = {0.0, 0.0};
 
         if (!image.get_interpolated_bands_double(sampled, bands, 2, x, y))
         {
+            // Almost always the point is outside the child. A value that
+            // reads on its own means it is the alpha band that is missing:
+            // the child was labelled with a band it does not have, which is
+            // a mistake to report rather than a pixel of no data. Only
+            // failed lookups pay for the second walk.
+            if (image.get_interpolated_pixel_double(value, x, y, band))
+            {
+                throw std::runtime_error(
+                    "Image pixel at (" + std::to_string(x) + ", " +
+                    std::to_string(y) + ") has no alpha band " +
+                    std::to_string(info.alpha_band));
+            }
+
             return false;
         }
 

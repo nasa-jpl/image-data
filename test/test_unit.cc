@@ -1180,25 +1180,61 @@ TEST(vicar_data, coordinates_beyond_int_range_are_out_of_bounds)
 }
 
 // An alpha_band the image does not have is a mistake in the .mod file, and
-// is reported as one rather than rendering the image as no data
+// is reported as one when the file is read rather than when the image is
+// first blended
 TEST(mod_data, alpha_band_out_of_range_is_an_error)
 {
     const auto my_root = std::string(IMG_DATA_TEST_SOURCE_DIR);
-    const auto image = rsvp::ImageData::read(
-        my_root + "/unit_test_data/image_data/hemisphere.mod");
+    const auto image = rsvp::VicarData::read_vicarfile(
+        my_root +
+        "/unit_test_data/image_data/NLB_530659343RASLF0582340NCAM00385M1.ht");
     ASSERT_TRUE(image != nullptr);
-    ASSERT_EQ(image->get_bands(), 1);
+    ASSERT_EQ(image->get_bands(), 3);
 
-    std::list<std::string> too_high = {"[", "alpha_band", "1", "]"};
+    std::list<std::string> too_high = {"[", "alpha_band", "3", "]"};
     EXPECT_THROW(rsvp::apply_properties(image, &too_high, "test.mod"),
                  std::runtime_error);
 
-    std::list<std::string> in_range = {"[", "alpha_band", "0", "]"};
+    std::list<std::string> in_range = {"[", "alpha_band", "2", "]"};
     EXPECT_TRUE(rsvp::apply_properties(image, &in_range, "test.mod"));
-    EXPECT_EQ(image->get_alpha_band(), 0);
+    EXPECT_EQ(image->get_alpha_band(), 2);
 
     // Negative means no alpha band, which any image can have
     std::list<std::string> none = {"[", "alpha_band", "-1", "]"};
     EXPECT_TRUE(rsvp::apply_properties(image, &none, "test.mod"));
     EXPECT_EQ(image->get_alpha_band(), -1);
+}
+
+// A single-band image is blended as opaque and its alpha band never read, so
+// any alpha_band is allowed on it, as it is on a composite that reports the
+// single band of its first child: the .mod defaults label such images with
+// band 2 unasked, and a composite has no band count of its own.
+TEST(mod_data, alpha_band_is_not_checked_against_a_single_band)
+{
+    const auto my_root = std::string(IMG_DATA_TEST_SOURCE_DIR);
+    const auto pgm = rsvp::ImageData::read(
+        my_root + "/unit_test_data/image_data/hemisphere.pgm");
+    ASSERT_TRUE(pgm != nullptr);
+    ASSERT_EQ(pgm->get_bands(), 1);
+
+    std::list<std::string> tokens = {"[", "alpha_band", "2", "]"};
+    EXPECT_TRUE(rsvp::apply_properties(pgm, &tokens, "test.mod"));
+    EXPECT_EQ(pgm->get_alpha_band(), 2);
+
+    const auto composite =
+        std::make_shared<rsvp::AlphaBlendingCompositeData>();
+    composite->add_image(pgm);
+    composite->add_image(rsvp::VicarData::read_vicarfile(
+        my_root +
+        "/unit_test_data/image_data/NLB_530659343RASLF0582340NCAM00385M1.ht"));
+    ASSERT_EQ(composite->get_bands(), 1);
+
+    tokens = {"[", "alpha_band", "2", "]"};
+    EXPECT_TRUE(rsvp::apply_properties(composite, &tokens, "test.mod"));
+
+    // The composite still blends: the PGM as opaque and the heightmap by
+    // its own alpha band
+    double value = 0.0;
+    EXPECT_NO_THROW(
+        composite->get_interpolated_pixel_double(value, 1.0, 1.0, 0));
 }

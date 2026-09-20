@@ -1591,9 +1591,12 @@ TEST(composite_data, seam_fallbacks_never_skip_a_child_without_bounds)
     }
 }
 
-// A child whose declared alpha band it cannot supply has no data, which is
-// no reason to abandon the whole lookup
-TEST(composite_data, a_missing_alpha_band_is_no_data_rather_than_an_error)
+// A child with data at a point but not the alpha band it declares was
+// labelled with a band it does not have. A blending composite reports that
+// as the mistake it is rather than quietly leaving the pixel out of the
+// mosaic; a scored composite, which only ranks children by that band, skips
+// the child as it always has. Away from the child it is just no data.
+TEST(composite_data, a_missing_alpha_band_is_an_error_where_the_data_is)
 {
     for (const CompositeFactory make : composite_factories)
     {
@@ -1604,8 +1607,21 @@ TEST(composite_data, a_missing_alpha_band_is_no_data_rather_than_an_error)
         composite->add_image(image);
 
         double value = 0.0;
-        EXPECT_NO_THROW(EXPECT_FALSE(
-            composite->get_interpolated_pixel_double(value, 1.0, 1.0, 0)));
+
+        if (dynamic_cast<rsvp::ScoredCompositeData *>(composite.get()))
+        {
+            EXPECT_NO_THROW(EXPECT_FALSE(
+                composite->get_interpolated_pixel_double(value, 1.0, 1.0, 0)));
+        }
+        else
+        {
+            EXPECT_THROW(
+                composite->get_interpolated_pixel_double(value, 1.0, 1.0, 0),
+                std::runtime_error);
+        }
+
+        EXPECT_NO_THROW(EXPECT_FALSE(composite->get_interpolated_pixel_double(
+            value, -100.0, -100.0, 0)));
     }
 }
 

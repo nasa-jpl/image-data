@@ -305,8 +305,10 @@ namespace rsvp
          * @param[out] alpha    The child's alpha at (x, y), on the image's
          * 1-255 scale
          *
-         * @return false if the child does not cover (x, y), or has no alpha
-         * there
+         * @return false if the child does not cover (x, y)
+         *
+         * @throws std::runtime_error if the child has data at (x, y) but not
+         * the alpha band it declares
          */
         bool sample_child(const GeometrySnapshot &snapshot,
                           size_t index,

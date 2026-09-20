@@ -147,11 +147,17 @@ namespace rsvp
                 // Pop off the value
                 tokens->pop_front();
 
-                // A band the image does not have would never be noticed
-                // otherwise: a composite blending by it treats every pixel
-                // of the image as no data, silently. A negative band means
-                // no alpha band at all, which is allowed.
-                if (alpha_band >= image->get_bands())
+                // Refuse a band the image does not have here, where the
+                // file can be named, rather than when a composite first
+                // blends by it. That only follows from the band count when
+                // there is more than one: a single-band image is blended as
+                // opaque and its alpha band never read, and a composite
+                // reports the count of its first child, which says nothing
+                // about the rest. A negative band means no alpha band at
+                // all, which is allowed.
+                const int bands = image->get_bands();
+
+                if (bands > 1 && alpha_band >= bands)
                 {
                     throw std::runtime_error(
                         filename + ": alpha_band " +
