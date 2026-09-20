@@ -391,6 +391,67 @@ TEST(vicar_data, file_writing)
     EXPECT_EQ(first, second);
 }
 
+TEST(vicar_data, binary_prefix_bytes)
+{
+    // None of the checked in files sets NBB, so build one that does. The
+    // image area is N2*N3 records, each NBB prefix bytes then N1 pixels.
+    const int n1 = 2, n2 = 3, n3 = 5, nbb = 4;
+    const int record_size = nbb + n1;
+    const int lblsize = 512;
+
+    std::stringstream labels;
+    labels << "LBLSIZE=" << lblsize
+           << " FORMAT='BYTE' TYPE='IMAGE' BUFSIZ=" << record_size
+           << " DIM=3 EOL=0 RECSIZE=" << record_size << " ORG='BSQ' NL=" << n2
+           << " NS=" << n1 << " NB=" << n3 << " N1=" << n1 << " N2=" << n2
+           << " N3=" << n3 << " N4=0 NBB=" << nbb
+           << " NLB=0 HOST='X64-64-LINX' INTFMT='LOW' REALFMT='RIEEE' "
+              "BHOST='X64-64-LINX' BINTFMT='LOW' BREALFMT='RIEEE' BLTYPE='' ";
+    std::string header = labels.str();
+    header.resize(static_cast<size_t>(lblsize), ' ');
+
+    std::string tmp_dir =
+        image_data::image_data_test_mkdtemp("/tmp/tmp.XXXXXX");
+    ASSERT_TRUE(tmp_dir.length() != 0);
+    const std::string path = tmp_dir + "/nbb.ht";
+
+    std::ofstream ofs(path, std::ios::binary);
+    ofs << header;
+    for (int record = 0; record < n2 * n3; record++)
+    {
+        for (int i = 0; i < nbb; i++)
+        {
+            ofs.put(static_cast<char>(0xEE)); // prefix, not pixel data
+        }
+        for (int sample = 0; sample < n1; sample++)
+        {
+            ofs.put(static_cast<char>(record * n1 + sample));
+        }
+    }
+    ofs.close();
+
+    auto vicar_data = rsvp::VicarData::read_vicarfile(path);
+
+    // BSQ, so a record is one line of one band.
+    for (int band = 0; band < n3; band++)
+    {
+        for (int line = 0; line < n2; line++)
+        {
+            for (int sample = 0; sample < n1; sample++)
+            {
+                double value = -1.0;
+                ASSERT_TRUE(
+                    vicar_data->get_pixel_double(value, sample, line, band));
+                EXPECT_EQ(
+                    static_cast<double>((band * n2 + line) * n1 + sample),
+                    value);
+            }
+        }
+    }
+
+    ASSERT_TRUE(image_data::image_data_test_rm_directory(tmp_dir) == 0);
+}
+
 TEST(vicar_data, file_synthesis)
 {
     // create a test vicardata file
