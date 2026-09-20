@@ -36,24 +36,20 @@ namespace rsvp
          * @brief What a composite needs to know about one of its children but
          * cannot afford to ask for once per pixel.
          *
-         * Asking a child where it is means parsing its labels, and asking
-         * which band holds its alpha walks the chain of wrappers around it.
-         * Both answers hold until an image moves or is relabelled.
+         * Asking a child where it is walks the chain of wrappers around it,
+         * transforming corners on the way back up, and asking which band
+         * holds its alpha walks it again. Both answers hold until an image
+         * moves or is relabelled.
          */
         struct ChildGeometry
         {
-            /// Where the child sits, in this composite's coordinates.
-            TerrainBounds bounds;
-
             /**
-             * How far outside `bounds` the child can still answer a clamped
-             * sample: one of its pixels, measured in this composite's units.
-             *
-             * Zero means "unknown" - the child has no pixel grid of its own to
-             * measure a pixel against - and suppresses culling rather than
-             * risking a cull of a child that would have answered.
+             * Where the child's pixels are, in this composite's coordinates,
+             * and how far past them a lookup on the child still lands on one.
+             * Invalid for a child that does not know, and then the child is
+             * never skipped.
              */
-            double clamp_reach = 0.0;
+            TerrainBounds bounds;
 
             /// How many bands the child has.
             int bands = 0;
@@ -67,17 +63,6 @@ namespace rsvp
              * to; a scored composite goes by the declaration alone.
              */
             int declared_alpha_band = -1;
-
-            /**
-             * Whether `bounds` may be used to skip the child.
-             *
-             * True only when the bounds are valid and the child says they
-             * are in the coordinates its lookups take. A bare `VicarData`
-             * reports where its labels say it sits in the world while its
-             * lookups are in pixel indices, and skipping it by those bounds
-             * would punch a hole in the terrain.
-             */
-            bool cullable = false;
         };
 
         /**
@@ -104,11 +89,11 @@ namespace rsvp
             TerrainBounds bounds;
 
             /**
-             * Whether every child is `cullable`, so that `bounds` is where
+             * Whether every child has valid bounds, so that `bounds` is where
              * every pixel this composite can answer for is. False with no
              * children.
              */
-            bool all_locate_pixels = true;
+            bool all_bounded = true;
 
             /**
              * The `geometry_version()` this was last known to be good for.
@@ -165,8 +150,7 @@ namespace rsvp
          * @param[in] x    The "x-like" coordinate of the pixel of interest
          * @param[in] y    The "y-like" coordinate of the pixel of interest
          *
-         * A child that is not `cullable` is never ruled out: its bounds are
-         * not where its pixels are, so they say nothing about its reach.
+         * A child whose bounds or reach are unknown is never ruled out.
          *
          * @return false if the child is certainly too far from (x, y) to have
          * a say. true means only that it might.
@@ -224,15 +208,6 @@ namespace rsvp
         static bool describes_same_geometry(const GeometrySnapshot &first,
                                             const GeometrySnapshot &second);
 
-        /**
-         * @brief Work out how far outside its bounds an image can still answer
-         * a clamped sample.
-         *
-         * @see ChildGeometry::clamp_reach
-         */
-        static double get_clamp_reach_of(const ImageData &image,
-                                         const TerrainBounds &bounds);
-
     public:
         /**
          * @brief Construct a new empty CompositeData.
@@ -287,15 +262,13 @@ namespace rsvp
         /**
          * @brief Get the union of bounds from all images in the composite.
          *
+         * The reach is the largest of the children's, or unknown if any
+         * child's is, or if any child has no bounds at all: a parent
+         * composite could otherwise skip this one where that child answers.
+         *
          * @return The combined terrain bounds.
          */
         TerrainBounds get_bounds() const override;
-
-        /**
-         * @brief True when every child can be located by its bounds, so that
-         * the merged bounds locate every pixel this composite can answer for.
-         */
-        bool bounds_locate_pixels() const override;
 
         /**
          * @brief Set interpolation mode for composite and all child images.

@@ -2,8 +2,9 @@
 
 #include <stdexcept>
 
-#include <cstdlib>
 #include <fstream>
+#include <locale>
+#include <sstream>
 
 
 namespace rsvp
@@ -27,6 +28,14 @@ namespace rsvp
 
         std::shared_ptr<CSVData> result(new CSVData());
 
+        // One stream for the whole file rather than one per field, which is
+        // what made reading a large CSV slow. It reads numbers the way the C
+        // locale writes them whatever locale the process has been switched
+        // to: `strtod` would honour a comma-decimal `LC_NUMERIC` and read
+        // "2.5" as 2.
+        std::istringstream field_stream;
+        field_stream.imbue(std::locale::classic());
+
         std::string str_line;
         while (std::getline(csv_file, str_line))
         {
@@ -36,9 +45,17 @@ namespace rsvp
             // number reads as 0, and a trailing comma does not add a field.
             for (size_t start = 0; start < str_line.size();)
             {
-                row.push_back(std::strtod(str_line.c_str() + start, nullptr));
-
                 const size_t comma = str_line.find(',', start);
+                const size_t end =
+                    (comma == std::string::npos) ? str_line.size() : comma;
+
+                field_stream.clear();
+                field_stream.str(str_line.substr(start, end - start));
+
+                double value = 0.0;
+                field_stream >> value;
+                row.push_back(value);
+
                 if (comma == std::string::npos)
                 {
                     break;

@@ -19,11 +19,21 @@ namespace rsvp
     void
     ZOffsetData::set_offset_and_scale(int band, double _offset, double _scale)
     {
-        if (has_band(band))
+        if (band < 0)
         {
-            offsets[band] = _offset;
-            scales[band] = _scale;
+            return;
         }
+
+        if (!has_band(band))
+        {
+            // The stored image has gained bands since the tables were sized
+            const size_t bands = static_cast<size_t>(band) + 1;
+            scales.resize(bands, 1.0);
+            offsets.resize(bands, 0.0);
+        }
+
+        offsets[band] = _offset;
+        scales[band] = _scale;
     }
 
     bool ZOffsetData::get_pixel_double(double &value,
@@ -32,12 +42,13 @@ namespace rsvp
                                        const int band) const
     {
         double raw_result = 0.0;
-        if (!has_band(band) || !img->get_pixel_double(raw_result, x, y, band))
+        if (!img || !band_in_range(band) ||
+            !img->get_pixel_double(raw_result, x, y, band))
         {
             return false;
         }
 
-        value = (raw_result * scales[band]) + offsets[band];
+        value = transform(raw_result, band);
         return true;
     }
 
@@ -47,13 +58,45 @@ namespace rsvp
                                                     const int band) const
     {
         double raw_result = 0.0;
-        if (!has_band(band) ||
+        if (!img || !band_in_range(band) ||
             !img->get_interpolated_pixel_double(raw_result, x, y, band))
         {
             return false;
         }
 
-        value = (raw_result * scales[band]) + offsets[band];
+        value = transform(raw_result, band);
+        return true;
+    }
+
+    bool ZOffsetData::get_interpolated_bands_double(double *values,
+                                                    const int *bands,
+                                                    const int count,
+                                                    const double x,
+                                                    const double y) const
+    {
+        if (!img)
+        {
+            return false;
+        }
+
+        for (int i = 0; i < count; i++)
+        {
+            if (!band_in_range(bands[i]))
+            {
+                return false;
+            }
+        }
+
+        if (!img->get_interpolated_bands_double(values, bands, count, x, y))
+        {
+            return false;
+        }
+
+        for (int i = 0; i < count; i++)
+        {
+            values[i] = transform(values[i], bands[i]);
+        }
+
         return true;
     }
 
@@ -64,13 +107,13 @@ namespace rsvp
                                                const int band) const
     {
         double raw_result = 0.0;
-        if (!has_band(band) ||
+        if (!img || !band_in_range(band) ||
             !img->get_clamped_pixel_double(raw_result, weight, x, y, band))
         {
             return false;
         }
 
-        value = (raw_result * scales[band]) + offsets[band];
+        value = transform(raw_result, band);
         return true;
     }
 
@@ -80,12 +123,13 @@ namespace rsvp
                                     const int band) const
     {
         int raw_result = 0;
-        if (!has_band(band) || !img->get_pixel_int(raw_result, x, y, band))
+        if (!img || !band_in_range(band) ||
+            !img->get_pixel_int(raw_result, x, y, band))
         {
             return false;
         }
 
-        value = round_to_int((raw_result * scales[band]) + offsets[band]);
+        value = round_to_int(transform(raw_result, band));
         return true;
     }
 
@@ -95,13 +139,13 @@ namespace rsvp
                                                  const int band) const
     {
         int raw_result = 0;
-        if (!has_band(band) ||
+        if (!img || !band_in_range(band) ||
             !img->get_interpolated_pixel_int(raw_result, x, y, band))
         {
             return false;
         }
 
-        value = round_to_int((raw_result * scales[band]) + offsets[band]);
+        value = round_to_int(transform(raw_result, band));
         return true;
     }
 

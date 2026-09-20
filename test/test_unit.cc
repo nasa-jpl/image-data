@@ -9,6 +9,8 @@
 #include <img_data_gtest/gtest.h>
 #include <test_utils/test_utils.h>
 
+#include <clocale>
+#include <cmath>
 #include <cstdint>
 #include <fstream>
 #include <string>
@@ -271,6 +273,63 @@ TEST(csv_data, read_csv_exceptions)
     ofs << "1,1,1," << std::endl << "1,1,";
     ofs.close();
     EXPECT_THROW(rsvp::CSVData::read_csv(filename), std::runtime_error);
+    ASSERT_TRUE(image_data::image_data_test_rm_directory(tmp_dir) == 0);
+}
+
+// A host that has switched the process to a comma-decimal locale must not
+// change what a CSV reads as
+TEST(csv_data, fields_read_the_same_in_any_locale)
+{
+    const std::string tmp_dir =
+        image_data::image_data_test_mkdtemp("/tmp/tmp.XXXXXX");
+    ASSERT_TRUE(tmp_dir.length() != 0);
+    const std::string filename = tmp_dir + "/locale.csv";
+
+    {
+        std::ofstream ofs(filename, std::ofstream::trunc);
+        ofs << "2.5,1,7\n"
+            << "1.5,-2.25,3e2\n";
+    }
+
+    const auto check = [&filename] {
+        const auto csv = rsvp::CSVData::read_csv(filename);
+        ASSERT_TRUE(csv != nullptr);
+        EXPECT_EQ(csv->get_width(), 3);
+        EXPECT_EQ(csv->get_height(), 2);
+
+        const double expected[2][3] = {{2.5, 1.0, 7.0}, {1.5, -2.25, 300.0}};
+
+        for (int y = 0; y < 2; y++)
+        {
+            for (int x = 0; x < 3; x++)
+            {
+                double value = 0.0;
+                EXPECT_TRUE(csv->get_pixel_double(value, x, y, 0));
+                EXPECT_DOUBLE_EQ(value, expected[y][x])
+                    << "at (" << x << ", " << y << ")";
+            }
+        }
+    };
+
+    check();
+
+    // Not every machine has a comma-decimal locale installed; where one is,
+    // reading under it must agree with reading under the C locale
+    const char *const comma_locales[] = {
+        "de_DE.UTF-8", "de_DE", "fr_FR.UTF-8"};
+
+    for (const char *const name : comma_locales)
+    {
+        if (std::setlocale(LC_NUMERIC, name) == nullptr)
+        {
+            continue;
+        }
+
+        check();
+        std::setlocale(LC_NUMERIC, "C");
+        break;
+    }
+
     ASSERT_TRUE(image_data::image_data_test_rm_directory(tmp_dir) == 0);
 }
 
@@ -682,6 +741,160 @@ TEST(vicar_data, quotes_in_labels_round_trip)
     double value = 0.0;
     EXPECT_TRUE(copy->get_pixel_double(value, 0, 0, 0));
     EXPECT_EQ(value, 42.0);
+
+    ASSERT_TRUE(image_data::image_data_test_rm_directory(tmp_dir) == 0);
+}
+
+// A quoted string that happens to start with '(' is still a string, and has
+// to be written back as one: written bare, the reader would take it for a
+// list and lose every label after it
+TEST(vicar_data, strings_starting_with_a_paren_round_trip)
+{
+    const std::string tmp_dir =
+        image_data::image_data_test_mkdtemp("/tmp/tmp.XXXXXX");
+    ASSERT_TRUE(tmp_dir.length() != 0);
+    const std::string path = tmp_dir + "/paren.vic";
+
+    write_synthetic_vicar(path,
+                          "FORMAT='BYTE'  TYPE='IMAGE'  BUFSIZ=1  DIM=3  "
+                          "EOL=0  RECSIZE=1  ORG='BSQ'  NL=1  NS=1  NB=1  "
+                          "N1=1  N2=1  N3=1  N4=0  NBB=0  NLB=0  "
+                          "INTFMT='LOW'  REALFMT='RIEEE'  "
+                          "PROPERTY='NOTES'  REMARK='(see fig. 1) revised'  "
+                          "SCALE=(2.0, 4.0)  OWNER='O''Brien'",
+                          {42});
+
+    const auto image = rsvp::VicarData::read_vicarfile(path);
+    ASSERT_TRUE(image != nullptr);
+
+    const std::string copy_path = tmp_dir + "/paren_copy.vic";
+    image->write_vicarfile(copy_path);
+
+    const auto copy = rsvp::VicarData::read_vicarfile(copy_path);
+    ASSERT_TRUE(copy != nullptr);
+
+    for (const auto &read : {image, copy})
+    {
+        std::string value;
+        EXPECT_TRUE(read->get_label_property("NOTES", "REMARK", value));
+        EXPECT_EQ(value, "(see fig. 1) revised");
+
+        // A real list is still written bare, and read back as one
+        value.clear();
+        EXPECT_TRUE(read->get_label_property("NOTES", "SCALE", value));
+        EXPECT_EQ(value, "(2.0, 4.0)");
+
+        // And the label after the troublesome one survives
+        value.clear();
+        EXPECT_TRUE(read->get_label_property("NOTES", "OWNER", value));
+        EXPECT_EQ(value, "O'Brien");
+    }
+
+    ASSERT_TRUE(image_data::image_data_test_rm_directory(tmp_dir) == 0);
+}
+
+// The labels the writer works out for itself must not be repeated from the
+// labels that were read in, whatever they said
+TEST(vicar_data, system_labels_are_written_once)
+{
+    const std::string tmp_dir =
+        image_data::image_data_test_mkdtemp("/tmp/tmp.XXXXXX");
+    ASSERT_TRUE(tmp_dir.length() != 0);
+    const std::string path = tmp_dir + "/system.vic";
+
+    write_synthetic_vicar(path,
+                          "FORMAT='BYTE'  TYPE='IMAGE'  BUFSIZ=1  DIM=3  "
+                          "EOL=0  RECSIZE=1  ORG='BSQ'  NL=1  NS=1  NB=1  "
+                          "N1=1  N2=1  N3=1  N4=7  NBB=0  NLB=0  "
+                          "HOST='SOMEHOST'  INTFMT='LOW'  REALFMT='RIEEE'  "
+                          "BHOST='OTHERHOST'  BLTYPE='SOMETHING'  "
+                          "MISSION='M2020'",
+                          {42});
+
+    const auto image = rsvp::VicarData::read_vicarfile(path);
+    ASSERT_TRUE(image != nullptr);
+
+    const std::string copy_path = tmp_dir + "/system_copy.vic";
+    image->write_vicarfile(copy_path);
+
+    std::string label;
+    {
+        std::ifstream copy_file(copy_path, std::ifstream::binary);
+        std::getline(copy_file, label, '\0');
+    }
+
+    const auto occurrences = [&label](const std::string &text) {
+        int count = 0;
+        for (size_t at = label.find(text); at != std::string::npos;
+             at = label.find(text, at + 1))
+        {
+            count++;
+        }
+        return count;
+    };
+
+    EXPECT_EQ(occurrences(" HOST="), 1);
+    EXPECT_EQ(occurrences(" BHOST="), 1);
+    EXPECT_EQ(occurrences(" BLTYPE="), 1);
+    EXPECT_EQ(occurrences(" N4="), 1);
+    EXPECT_EQ(occurrences(" EOL="), 1);
+    EXPECT_EQ(occurrences("SOMEHOST"), 0);
+    EXPECT_EQ(occurrences("N4=7"), 0);
+
+    // While a label the writer does not work out for itself is kept
+    EXPECT_EQ(occurrences(" MISSION='M2020'"), 1);
+
+    ASSERT_TRUE(image_data::image_data_test_rm_directory(tmp_dir) == 0);
+}
+
+// A value that does not fit the file's integer format saturates rather than
+// being converted out of range, which is undefined and comes out differently
+// on different processors
+TEST(vicar_data, out_of_range_values_saturate_when_written)
+{
+    const std::string tmp_dir =
+        image_data::image_data_test_mkdtemp("/tmp/tmp.XXXXXX");
+    ASSERT_TRUE(tmp_dir.length() != 0);
+
+    {
+        rsvp::VicarData image(4, 1, 1, rsvp::VicarData::BYTE);
+        image.set_pixel_double(300.0, 0, 0, 0);
+        image.set_pixel_double(-1.0, 1, 0, 0);
+        image.set_pixel_double(42.7, 2, 0, 0);
+        image.set_pixel_double(std::nan(""), 3, 0, 0);
+
+        const std::string path = tmp_dir + "/bytes.vic";
+        image.write_vicarfile(path);
+
+        const auto copy = rsvp::VicarData::read_vicarfile(path);
+        ASSERT_TRUE(copy != nullptr);
+
+        const double expected[] = {255.0, 0.0, 42.0, 0.0};
+        for (int x = 0; x < 4; x++)
+        {
+            double value = -1.0;
+            EXPECT_TRUE(copy->get_pixel_double(value, x, 0, 0));
+            EXPECT_EQ(value, expected[x]) << "at " << x;
+        }
+    }
+
+    {
+        rsvp::VicarData image(2, 1, 1, rsvp::VicarData::HALF);
+        image.set_pixel_double(40000.0, 0, 0, 0);
+        image.set_pixel_double(-40000.0, 1, 0, 0);
+
+        const std::string path = tmp_dir + "/halves.vic";
+        image.write_vicarfile(path);
+
+        const auto copy = rsvp::VicarData::read_vicarfile(path);
+        ASSERT_TRUE(copy != nullptr);
+
+        double value = 0.0;
+        EXPECT_TRUE(copy->get_pixel_double(value, 0, 0, 0));
+        EXPECT_EQ(value, 32767.0);
+        EXPECT_TRUE(copy->get_pixel_double(value, 1, 0, 0));
+        EXPECT_EQ(value, -32768.0);
+    }
 
     ASSERT_TRUE(image_data::image_data_test_rm_directory(tmp_dir) == 0);
 }

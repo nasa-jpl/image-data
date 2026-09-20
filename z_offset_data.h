@@ -24,15 +24,40 @@ namespace rsvp
         std::vector<double> scales;
 
         /**
-         * @brief Whether `band` has an offset and scale.
+         * @brief Whether `band` has an offset and scale of its own.
          *
          * Checked against the tables rather than the stored image's band
          * count, which would cost a walk down the wrappers on every pixel.
-         * The tables are sized to that count when this is constructed.
+         * The tables are sized to that count when this is constructed, and
+         * grow when a later band is given an offset and scale.
          */
         bool has_band(int band) const
         {
             return band >= 0 && static_cast<size_t>(band) < scales.size();
+        }
+
+        /**
+         * @brief Whether `band` is one the stored image has.
+         *
+         * A band with an offset and scale of its own is known to be, without
+         * asking. Only a band without one - a band the stored image gained
+         * after the tables were sized, or one it never had - costs the walk
+         * down to it to find out.
+         */
+        bool band_in_range(int band) const
+        {
+            return has_band(band) || (band >= 0 && band < get_bands());
+        }
+
+        /**
+         * @brief Offset and scale one raw value of `band`.
+         *
+         * A band without an offset and scale of its own passes through
+         * unchanged.
+         */
+        double transform(const double raw, const int band) const
+        {
+            return has_band(band) ? (raw * scales[band]) + offsets[band] : raw;
         }
 
     public:
@@ -129,7 +154,21 @@ namespace rsvp
                                         int band) const override;
 
         /**
+         * @brief Sample several bands of the stored image at once, and offset
+         * and scale each.
+         *
+         * @see ImageData::get_interpolated_bands_double
+         */
+        bool get_interpolated_bands_double(double *values,
+                                           const int *bands,
+                                           int count,
+                                           double x,
+                                           double y) const override;
+
+        /**
          * @brief Set the offset and scale for a band of the stored image.
+         *
+         * A negative band is ignored.
          *
          * @param band      The band of the image to transform
          * @param offset    The offset to apply to the band's data
@@ -156,11 +195,6 @@ namespace rsvp
         TerrainBounds get_bounds() const override
         {
             return img ? img->get_bounds() : TerrainBounds();
-        }
-
-        bool bounds_locate_pixels() const override
-        {
-            return img ? img->bounds_locate_pixels() : false;
         }
     };
 }

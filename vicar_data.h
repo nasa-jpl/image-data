@@ -217,6 +217,36 @@ namespace rsvp
         };
 
     private:
+        /**
+         * @brief Whether all four corners of a bilinear sample are inside the
+         * image.
+         *
+         * The far corners are never nearer the origin than the near ones, so
+         * four tests cover all four corners.
+         */
+        bool corners_in_image(const BilinearCorners &corners) const
+        {
+            return corners.x0 >= 0 && corners.y0 >= 0 && corners.x1 < NS &&
+                corners.y1 < NL;
+        }
+
+        /**
+         * @brief Bilinearly interpolate one band from corners already checked
+         * to be inside the image, and a band already checked to exist.
+         */
+        double interpolate_corners(const BilinearCorners &corners,
+                                   const int band) const
+        {
+            const double *plane = pixel_data.get() + pixel_index(0, 0, band);
+            const double *upper = plane + static_cast<size_t>(corners.y0) * NS;
+            const double *lower = plane + static_cast<size_t>(corners.y1) * NS;
+
+            return upper[corners.x0] * corners.weight_ul +
+                upper[corners.x1] * corners.weight_ur +
+                lower[corners.x0] * corners.weight_ll +
+                lower[corners.x1] * corners.weight_lr;
+        }
+
         // Image comments
         std::string comments;
 
@@ -379,22 +409,59 @@ namespace rsvp
 
             const BilinearCorners corners = bilinear_corners(x, y);
 
-            // The far corners are never nearer the origin than the near ones,
-            // so these four tests cover all four corners
-            if (corners.x0 < 0 || corners.y0 < 0 || corners.x1 >= NS ||
-                corners.y1 >= NL || band < 0 || band >= NB)
+            if (!corners_in_image(corners) || band < 0 || band >= NB)
             {
                 return false;
             }
 
-            const double *plane = pixel_data.get() + pixel_index(0, 0, band);
-            const double *upper = plane + static_cast<size_t>(corners.y0) * NS;
-            const double *lower = plane + static_cast<size_t>(corners.y1) * NS;
+            value = interpolate_corners(corners, band);
+            return true;
+        }
 
-            value = upper[corners.x0] * corners.weight_ul +
-                upper[corners.x1] * corners.weight_ur +
-                lower[corners.x0] * corners.weight_ll +
-                lower[corners.x1] * corners.weight_lr;
+        /**
+         * @brief Interpolate several bands from the same four corners.
+         *
+         * @see ImageData::get_interpolated_bands_double
+         */
+        bool get_interpolated_bands_double(double *values,
+                                           const int *bands,
+                                           const int count,
+                                           const double x,
+                                           const double y) const override
+        {
+            if (!get_interpolating())
+            {
+                const int sample = round_to_int(x);
+                const int line = round_to_int(y);
+
+                for (int i = 0; i < count; i++)
+                {
+                    if (!get_pixel_double(values[i], sample, line, bands[i]))
+                    {
+                        return false;
+                    }
+                }
+
+                return true;
+            }
+
+            const BilinearCorners corners = bilinear_corners(x, y);
+
+            if (!corners_in_image(corners))
+            {
+                return false;
+            }
+
+            for (int i = 0; i < count; i++)
+            {
+                if (bands[i] < 0 || bands[i] >= NB)
+                {
+                    return false;
+                }
+
+                values[i] = interpolate_corners(corners, bands[i]);
+            }
+
             return true;
         }
 
@@ -580,7 +647,29 @@ namespace rsvp
             return NB;
         }
 
-        TerrainBounds get_bounds() const override;
+        /**
+         * @brief The pixel grid, in pixel indices.
+         *
+         * A bare VICAR image is looked up by sample and line, so that is where
+         * its pixels are. Where its labels say it sits in the world is
+         * `get_map_bounds`.
+         */
+        TerrainBounds get_bounds() const override
+        {
+            return pixel_grid_bounds();
+        }
+
+        /**
+         * @brief Where the SURFACE_PROJECTION_PARMS labels place this image
+         * in the world.
+         *
+         * Not `get_bounds`: lookups on a bare VICAR image take pixel indices,
+         * not world coordinates, so a composite must not skip it by these.
+         *
+         * @return Bounds over the pixel centers, in meters, or invalid bounds
+         * if the labels do not place the image.
+         */
+        TerrainBounds get_map_bounds() const;
 
         bool get_camera_cahv_frame(std::string &frame) const;
 

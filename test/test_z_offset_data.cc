@@ -1,3 +1,4 @@
+#include <composite_data.h>
 #include <platform.h>
 #include <translated_data.h>
 #include <z_offset_data.h>
@@ -15,7 +16,6 @@ private:
     int width = 3;
     int height = 3;
     int band_count = 1;
-    int alpha_value = -1;
 
 public:
     ZOffsetTestImage() = default;
@@ -101,16 +101,6 @@ public:
     int get_height() const override
     {
         return height;
-    }
-
-    int get_alpha_band() const override
-    {
-        return alpha_value;
-    }
-
-    void set_alpha_band(int band) override
-    {
-        alpha_value = band;
     }
 };
 
@@ -409,6 +399,11 @@ namespace
             return 3;
         }
 
+        rsvp::TerrainBounds get_bounds() const override
+        {
+            return pixel_grid_bounds();
+        }
+
         bool
         get_pixel_double(double &value, int x, int y, int band) const override
         {
@@ -429,9 +424,15 @@ TEST(z_offset_data, bounds_are_the_stored_images)
 {
     const auto image = std::make_shared<PlainTestImage>();
 
+    // Bare, that is the image's own grid
     rsvp::ZOffsetData unplaced(image);
-    EXPECT_FALSE(unplaced.get_bounds().valid);
-    EXPECT_FALSE(unplaced.bounds_locate_pixels());
+    const auto grid = unplaced.get_bounds();
+    ASSERT_TRUE(grid.valid);
+    EXPECT_DOUBLE_EQ(grid.min_x, 0.0);
+    EXPECT_DOUBLE_EQ(grid.max_x, 2.0);
+    EXPECT_DOUBLE_EQ(grid.pixel_reach, 1.0);
+
+    // And placed, it is wherever the transform put it
 
     const auto placed =
         std::make_shared<rsvp::TranslatedData>(image, 5.0, 6.0, 1.0, 0.0);
@@ -445,7 +446,7 @@ TEST(z_offset_data, bounds_are_the_stored_images)
     EXPECT_DOUBLE_EQ(bounds.max_x, expected.max_x);
     EXPECT_DOUBLE_EQ(bounds.min_y, expected.min_y);
     EXPECT_DOUBLE_EQ(bounds.max_y, expected.max_y);
-    EXPECT_TRUE(offset.bounds_locate_pixels());
+    EXPECT_DOUBLE_EQ(bounds.pixel_reach, expected.pixel_reach);
 }
 
 // The stored image is the one that interpolates, so turning interpolation off
@@ -473,8 +474,8 @@ TEST(z_offset_data, interpolation_passes_through)
     EXPECT_TRUE(offset.get_interpolating());
 }
 
-// A band the tables were not sized for is out of range rather than an error
-TEST(z_offset_data, bands_beyond_the_tables_are_out_of_range)
+// A band the stored image lacks is out of range rather than an error
+TEST(z_offset_data, bands_the_image_lacks_are_out_of_range)
 {
     rsvp::ZOffsetData offset(std::make_shared<PlainTestImage>());
 
@@ -486,4 +487,33 @@ TEST(z_offset_data, bands_beyond_the_tables_are_out_of_range)
     EXPECT_FALSE(offset.get_pixel_double(value, 0, 0, -1));
     EXPECT_FALSE(offset.get_interpolated_pixel_double(value, 0.0, 0.0, 5));
     EXPECT_TRUE(offset.get_pixel_double(value, 0, 0, 0));
+}
+
+// The offset and scale tables are sized when the ZOffsetData is built, and a
+// stored container can gain bands after that. Those bands pass through
+// unchanged until they are given an offset and scale, rather than being
+// refused.
+TEST(z_offset_data, bands_gained_by_the_stored_image_pass_through)
+{
+    const auto composite =
+        std::make_shared<rsvp::AlphaBlendingCompositeData>();
+    rsvp::ZOffsetData offset(composite);
+    EXPECT_EQ(offset.get_bands(), 0);
+
+    composite->add_image(std::make_shared<ZOffsetTestImage>(3));
+    EXPECT_EQ(offset.get_bands(), 3);
+
+    double value = 0.0;
+    ASSERT_TRUE(offset.get_pixel_double(value, 1, 1, 0));
+    EXPECT_DOUBLE_EQ(value, 5.0);
+    ASSERT_TRUE(offset.get_interpolated_pixel_double(value, 1.0, 1.0, 1));
+    EXPECT_DOUBLE_EQ(value, 14.0);
+
+    offset.set_offset_and_scale(1, 100.0, 2.0);
+    ASSERT_TRUE(offset.get_interpolated_pixel_double(value, 1.0, 1.0, 1));
+    EXPECT_DOUBLE_EQ(value, 128.0);
+
+    // The bands below the one just given a scale are still passed through
+    ASSERT_TRUE(offset.get_pixel_double(value, 1, 1, 0));
+    EXPECT_DOUBLE_EQ(value, 5.0);
 }

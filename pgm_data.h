@@ -136,6 +136,12 @@ namespace rsvp
             return 1;
         }
 
+        /// A PGM is looked up by pixel index, so that is where its pixels are
+        TerrainBounds get_bounds() const override
+        {
+            return pixel_grid_bounds();
+        }
+
         // Return an exact pixel value as an int
         bool get_pixel_int(int &value,
                            int sample,

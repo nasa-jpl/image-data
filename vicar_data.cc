@@ -4,14 +4,17 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <cstdint>
 #include <cstring>
 #include <fstream>
+#include <limits>
 #include <regex>
 #include <sstream>
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -98,10 +101,33 @@ namespace rsvp
         }
 
         // Encodes `count` doubles into one raw type, in the host byte order.
-        // The raw types mirror the decoder's: converting a negative double to
-        // an unsigned type is undefined, and does not wrap on every target.
+        // The raw types mirror the decoder's. Converting a double to an
+        // integer type it does not fit is undefined, and comes out differently
+        // on x86-64 and arm64, so integer types saturate first: NaN to zero,
+        // everything else to the nearest end of the type's range.
         using Encoder =
             void (*)(const double *source, uint8_t *destination, int count);
+
+        template <typename T>
+        T to_raw(const double value)
+        {
+            if constexpr (std::is_integral<T>::value)
+            {
+                if (std::isnan(value))
+                {
+                    return 0;
+                }
+
+                return static_cast<T>(std::clamp(
+                    value,
+                    static_cast<double>(std::numeric_limits<T>::lowest()),
+                    static_cast<double>(std::numeric_limits<T>::max())));
+            }
+            else
+            {
+                return static_cast<T>(value);
+            }
+        }
 
         template <typename T>
         void encode_run(const double *source,
@@ -110,7 +136,7 @@ namespace rsvp
         {
             for (int i = 0; i < count; i++)
             {
-                const T raw = static_cast<T>(source[i]);
+                const T raw = to_raw<T>(source[i]);
                 memcpy(destination, &raw, sizeof(T));
                 destination += sizeof(T);
             }
@@ -147,15 +173,26 @@ namespace rsvp
             file.read(&text[old_size], static_cast<std::streamsize>(count));
         }
 
-        // The system labels write_vicarfile emits itself, which must not be
-        // repeated from the labels read in: a repeated label overrides the
-        // one written, and a repeated `EOL=1` sends the reader looking for
-        // end-of-line labels that were never written.
-        const std::array<std::string_view, 24> written_system_labels {
+        // The system labels write_vicarfile works out for itself. set_labels
+        // never keeps one of these as an unassociated label, so the writer
+        // cannot repeat one from the labels read in: a repeated label
+        // overrides the one written, and a repeated `EOL=1` sends the reader
+        // looking for end-of-line labels that were never written.
+        //
+        // Every `TAG=` the writer emits ahead of the unassociated labels must
+        // be here, and vice versa.
+        const std::array<std::string_view, 24> system_labels {
             "LBLSIZE", "FORMAT",  "TYPE",  "BUFSIZ",  "DIM",      "EOL",
             "RECSIZE", "ORG",     "NL",    "NS",      "NB",       "N1",
             "N2",      "N3",      "N4",    "NBB",     "NLB",      "HOST",
             "INTFMT",  "REALFMT", "BHOST", "BINTFMT", "BREALFMT", "BLTYPE"};
+
+        bool is_system_label(const std::string &tag)
+        {
+            return std::find(system_labels.begin(),
+                             system_labels.end(),
+                             tag) != system_labels.end();
+        }
     }
 
     VicarData::VicarData() = default;
@@ -375,17 +412,11 @@ namespace rsvp
                 {
                     NLB = std::stoi(value);
                 }
-                else
+                else if (!is_system_label(tag))
                 {
-                    static const std::array<std::string_view, 6>
-                        remaining_labels {
-                            "N1", "N2", "N3", "DIM", "TYPE", "BUFSIZ"};
-                    if (std::find(remaining_labels.begin(),
-                                  remaining_labels.end(),
-                                  tag) == remaining_labels.end())
-                    {
-                        unassociated_labels[tag] = value;
-                    }
+                    // Anything the writer does not work out for itself is
+                    // kept, to be written back as it was read
+                    unassociated_labels[tag] = value;
                 }
             }
         }
@@ -700,16 +731,29 @@ namespace rsvp
 
     namespace
     {
+        // Whether set_labels would read `value` back as a parenthesized list:
+        // it takes everything up to the first ')' as the list, so a value
+        // with a ')' anywhere but at the end is not one, whatever it starts
+        // with
+        bool is_list(const std::string &value)
+        {
+            return value.size() >= 2 && value.front() == '(' &&
+                value.back() == ')' &&
+                value.find(')') == value.size() - 1;
+        }
+
         // Write one label the way set_labels reads it back: numbers and
         // parenthesized lists bare, anything else quoted, with a quote inside
-        // a string doubled up
+        // a string doubled up. A quoted string and a bare list are stored the
+        // same way, so a string that merely starts with '(' has to be told
+        // apart by whether it would survive being read back bare.
         void write_label(std::ostream &labels,
                          const std::string &tag,
                          const std::string &value)
         {
             labels << tag << '=';
 
-            if (is_number(value) || (!value.empty() && value[0] == '('))
+            if (is_number(value) || is_list(value))
             {
                 labels << value;
             }
@@ -807,14 +851,6 @@ namespace rsvp
 
         for (const auto &label : unassociated_labels)
         {
-            if (std::find(written_system_labels.begin(),
-                          written_system_labels.end(),
-                          label.first) != written_system_labels.end())
-            {
-                // Already written above
-                continue;
-            }
-
             write_label(labels, label.first, label.second);
         }
 
@@ -992,7 +1028,7 @@ namespace rsvp
             extract_vector(raw_value, camera_e);
     }
 
-    TerrainBounds VicarData::get_bounds() const
+    TerrainBounds VicarData::get_map_bounds() const
     {
         TerrainBounds bounds;
 

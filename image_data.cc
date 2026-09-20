@@ -153,6 +153,23 @@ namespace rsvp
         return true;
     }
 
+    bool ImageData::get_interpolated_bands_double(double *values,
+                                                  const int *bands,
+                                                  const int count,
+                                                  const double x,
+                                                  const double y) const
+    {
+        for (int i = 0; i < count; i++)
+        {
+            if (!get_interpolated_pixel_double(values[i], x, y, bands[i]))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
     bool ImageData::get_clamped_pixel_double(double &value,
                                              double &weight,
                                              const double x,

@@ -19,14 +19,9 @@ namespace rsvp
                                    double y_offset,
                                    double scale,
                                    double rotation) :
-        TranslatedData(std::move(inImg),
-                       x_offset,
-                       y_offset,
-                       scale * cos(rotation),
-                       -1.0 * scale * sin(rotation),
-                       scale * sin(rotation),
-                       scale * cos(rotation))
+        transformed_image(std::move(inImg))
     {
+        set_trans(x_offset, y_offset, scale, rotation);
     }
 
     TranslatedData::TranslatedData(std::shared_ptr<rsvp::ImageData> inImg,
@@ -157,6 +152,24 @@ namespace rsvp
         }
     }
 
+    bool TranslatedData::get_interpolated_bands_double(double *values,
+                                                       const int *bands,
+                                                       const int count,
+                                                       const double x,
+                                                       const double y) const
+    {
+        if (transformed_image == nullptr)
+        {
+            return false;
+        }
+
+        const double sample = ixx * x + iyx * y + i_x;
+        const double line = ixy * x + iyy * y + i_y;
+
+        return transformed_image->get_interpolated_bands_double(
+            values, bands, count, sample, line);
+    }
+
     bool TranslatedData::get_clamped_pixel_double(double &value,
                                                   double &weight,
                                                   const double x,
@@ -220,17 +233,6 @@ namespace rsvp
         }
     }
 
-    bool TranslatedData::bounds_locate_pixels() const
-    {
-        if (!transformed_image)
-        {
-            return false;
-        }
-
-        return (get_width() >= 1 && get_height() >= 1) ||
-            transformed_image->bounds_locate_pixels();
-    }
-
     TerrainBounds TranslatedData::get_bounds() const
     {
         if (!transformed_image)
@@ -238,70 +240,31 @@ namespace rsvp
             return TerrainBounds();
         }
 
-        // The corners of the region we transform, in the stored image's own
-        // coordinates.
-        double first_sample = 0.0;
-        double first_line = 0.0;
-        double last_sample = 0.0;
-        double last_line = 0.0;
+        // The stored image's bounds are in the coordinates we transform from,
+        // whether it is a bare image reporting its own grid, a container of
+        // images that are already placed, or a nested transform. Either way
+        // our transform is what places them.
+        const TerrainBounds inner = transformed_image->get_bounds();
 
-        // An image with a pixel grid does not need to know where it is for us
-        // to know where it is: our transform is what places its grid. Only
-        // when there is no grid to place, or the image already places its own
-        // grid, do we go by what it says about itself.
-        //
-        // The first matters for the wedge heightmaps a `ModData` mosaic is
-        // built from, which carry their placement as bare labels rather than
-        // in the projection group `VicarData` reads, and so report no bounds
-        // of their own. Deriving ours from the transform instead keeps the
-        // mosaic from being a composite whose children are all in unknown
-        // places.
-        //
-        // The second is a nested transform, whose grid we would otherwise
-        // place as though the inner transform were not there.
-        const bool has_own_grid = get_width() >= 1 && get_height() >= 1;
-
-        if (has_own_grid && !transformed_image->bounds_locate_pixels())
+        if (!inner.valid)
         {
-            // Bounds describe the extent of the pixel centers, so the far
-            // corner is the last pixel - (width - 1, height - 1) - not
-            // (width, height).
-            last_sample = get_width() - 1;
-            last_line = get_height() - 1;
-        }
-        else
-        {
-            // Either a container of images that are already placed - a
-            // CompositeData, say - or a nested transform. Its bounds are in
-            // the coordinates we transform from, so transform those instead.
-            const TerrainBounds underlying_bounds =
-                transformed_image->get_bounds();
-
-            if (!underlying_bounds.valid)
-            {
-                return underlying_bounds;
-            }
-
-            first_sample = underlying_bounds.min_x;
-            first_line = underlying_bounds.min_y;
-            last_sample = underlying_bounds.max_x;
-            last_line = underlying_bounds.max_y;
+            return inner;
         }
 
         double corners_x[4];
         double corners_y[4];
 
-        corners_x[0] = txx * first_sample + tyx * first_line + t_x;
-        corners_y[0] = txy * first_sample + tyy * first_line + t_y;
+        corners_x[0] = txx * inner.min_x + tyx * inner.min_y + t_x;
+        corners_y[0] = txy * inner.min_x + tyy * inner.min_y + t_y;
 
-        corners_x[1] = txx * last_sample + tyx * first_line + t_x;
-        corners_y[1] = txy * last_sample + tyy * first_line + t_y;
+        corners_x[1] = txx * inner.max_x + tyx * inner.min_y + t_x;
+        corners_y[1] = txy * inner.max_x + tyy * inner.min_y + t_y;
 
-        corners_x[2] = txx * first_sample + tyx * last_line + t_x;
-        corners_y[2] = txy * first_sample + tyy * last_line + t_y;
+        corners_x[2] = txx * inner.min_x + tyx * inner.max_y + t_x;
+        corners_y[2] = txy * inner.min_x + tyy * inner.max_y + t_y;
 
-        corners_x[3] = txx * last_sample + tyx * last_line + t_x;
-        corners_y[3] = txy * last_sample + tyy * last_line + t_y;
+        corners_x[3] = txx * inner.max_x + tyx * inner.max_y + t_x;
+        corners_y[3] = txy * inner.max_x + tyy * inner.max_y + t_y;
 
         TerrainBounds result;
         result.valid = true;
@@ -317,6 +280,17 @@ namespace rsvp
             result.min_y = std::min(result.min_y, corners_y[i]);
             result.max_y = std::max(result.max_y, corners_y[i]);
         }
+
+        // A point within the stored image's reach of its bounds is within
+        // that reach along each of its axes, and moving that far along both
+        // moves our x by at most that reach times the sum of the magnitudes
+        // in the first row of the matrix, and our y by the same for the
+        // second row. The larger of the two serves both axes. Exact for a
+        // similarity transform of a square grid; never short, for any affine,
+        // which is what matters, since a reach that is short punches holes
+        // in a mosaic while one that is long only costs a cull.
+        result.pixel_reach = inner.pixel_reach *
+            std::max(fabs(txx) + fabs(tyx), fabs(txy) + fabs(tyy));
 
         return result;
     }

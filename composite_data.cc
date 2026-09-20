@@ -44,7 +44,8 @@ namespace rsvp
 
             return first.min_x == second.min_x &&
                 first.max_x == second.max_x && first.min_y == second.min_y &&
-                first.max_y == second.max_y;
+                first.max_y == second.max_y &&
+                first.pixel_reach == second.pixel_reach;
         }
     }
 
@@ -340,24 +341,25 @@ namespace rsvp
 
             const ImageData &image = *images[i];
 
-            double current_score = 0.0;
-            double current_value = 0.0;
+            // The score and the value, from one walk down the child
+            const int bands[2] = {info.declared_alpha_band, b};
+            double sampled[2] = {0.0, 0.0};
 
-            if (!image.get_interpolated_pixel_double(
-                    current_score, x, y, info.declared_alpha_band) ||
-                !image.get_interpolated_pixel_double(current_value, x, y, b))
+            if (!image.get_interpolated_bands_double(sampled, bands, 2, x, y))
             {
                 // If this image doesn't have a value or an alpha value at this
                 // point, skip it
                 continue;
             }
 
+            const double current_score = sampled[0];
+
             covered = true;
 
             if (current_score > max_score)
             {
                 max_score = current_score;
-                value = current_value;
+                value = sampled[1];
             }
         }
 
@@ -424,38 +426,6 @@ namespace rsvp
         return true;
     }
 
-    double CompositeData::get_clamp_reach_of(const ImageData &image,
-                                             const TerrainBounds &bounds)
-    {
-        if (!bounds.valid)
-        {
-            return 0.0;
-        }
-
-        const int width = image.get_width();
-        const int height = image.get_height();
-
-        if (width < 2 || height < 2)
-        {
-            // Nothing to measure a pixel against. An image with no grid of its
-            // own is a container of images that are already placed, and how
-            // far past its edge it can still reach is a question for whichever
-            // of those the point is near.
-            return 0.0;
-        }
-
-        // A clamped sample reaches one of the image's own pixels past its
-        // edge, so the reach we want is that pixel's pitch in our coordinates.
-        //
-        // Bounds are axis-aligned, so for a rotated image each span covers
-        // more ground than the pitch along that axis. Taking the larger of the
-        // two estimates is therefore never short of the true pitch, whatever
-        // the rotation, and erring long only costs us a cull we could have
-        // made.
-        return std::max(bounds.get_width() / (width - 1),
-                        bounds.get_height() / (height - 1));
-    }
-
     bool CompositeData::describes_same_geometry(const GeometrySnapshot &first,
                                                 const GeometrySnapshot &second)
     {
@@ -473,8 +443,6 @@ namespace rsvp
             if (one.bands != other.bands ||
                 one.alpha_band != other.alpha_band ||
                 one.declared_alpha_band != other.declared_alpha_band ||
-                one.cullable != other.cullable ||
-                one.clamp_reach != other.clamp_reach ||
                 !same_bounds(one.bounds, other.bounds))
             {
                 return false;
@@ -521,21 +489,25 @@ namespace rsvp
             ChildGeometry &info = snapshot->children.at(i);
 
             info.bounds = image->get_bounds();
-            info.clamp_reach = get_clamp_reach_of(*image, info.bounds);
             info.bands = image->get_bands();
             info.declared_alpha_band = image->get_alpha_band();
             info.alpha_band = get_alpha_band_of(*image);
-            info.cullable =
-                info.bounds.valid && image->bounds_locate_pixels();
 
             snapshot->bounds.merge(info.bounds);
-            snapshot->all_locate_pixels &= info.cullable;
+            snapshot->all_bounded &= info.bounds.valid;
         }
 
         if (images.empty())
         {
-            // Nothing locates anything
-            snapshot->all_locate_pixels = false;
+            // Nothing bounds anything
+            snapshot->all_bounded = false;
+        }
+
+        if (!snapshot->all_bounded)
+        {
+            // A child that does not know where it is could answer anywhere,
+            // so a parent composite must not skip this one by its bounds
+            snapshot->bounds.pixel_reach = 0.0;
         }
 
         if (published != nullptr &&
@@ -565,26 +537,15 @@ namespace rsvp
                                         const double x,
                                         const double y)
     {
-        if (!info.cullable || info.clamp_reach <= 0.0)
-        {
-            // Either nothing is known about where the child's pixels are, or
-            // its bounds are not where its lookups look, so nothing is ruled
-            // out. Every path that skips a child comes through here, so this
-            // is the one place that has to get that right.
-            return true;
-        }
-
-        return info.bounds.contains(x, y, info.clamp_reach + bounds_margin);
+        // Every path that skips a child comes through here, so this is the
+        // one place that has to get it right: a child whose bounds or reach
+        // are unknown is never ruled out
+        return info.bounds.could_reach(x, y, bounds_margin);
     }
 
     TerrainBounds CompositeData::get_bounds() const
     {
         return geometry().bounds;
-    }
-
-    bool CompositeData::bounds_locate_pixels() const
-    {
-        return geometry().all_locate_pixels;
     }
 
     bool CompositeData::sample_child(const GeometrySnapshot &snapshot,
@@ -601,14 +562,6 @@ namespace rsvp
         // finding that out by sampling one costs a walk down its wrappers,
         // an inverse transform and a bounds check. Rule it out by its bounds
         // first where that is safe.
-        //
-        // The reach allowed is one child pixel, which covers the half-pixel
-        // an uninterpolated lookup rounds across for any similarity
-        // transform, and is more than an interpolated lookup ever needs. An
-        // affine that is far from a similarity - one that stretches one grid
-        // axis much more than the other - could in principle round further
-        // than that under `deinterpolate`; no mosaic here has such a
-        // transform.
         if (!child_may_reach(info, x, y))
         {
             return false;
@@ -632,23 +585,33 @@ namespace rsvp
             return true;
         }
 
-        if (!image.get_interpolated_pixel_double(value, x, y, band))
-        {
-            // Coordinates are out of bounds of image data
-            return false;
-        }
-
         if (info.alpha_band < 0)
         {
+            if (!image.get_interpolated_pixel_double(value, x, y, band))
+            {
+                // Coordinates are out of bounds of image data
+                return false;
+            }
+
             // Nothing to say how opaque it is, so just call it opaque.
             alpha = 255.0;
             return true;
         }
 
-        // A valid data value but no alpha value at this pixel means the
-        // alpha band was declared out of range; treat that as no data.
-        return image.get_interpolated_pixel_double(
-            alpha, x, y, info.alpha_band);
+        // The value and its alpha from one walk down the child. A valid data
+        // value but no alpha value at this pixel means the alpha band was
+        // declared out of range; treat that as no data.
+        const int bands[2] = {band, info.alpha_band};
+        double sampled[2] = {0.0, 0.0};
+
+        if (!image.get_interpolated_bands_double(sampled, bands, 2, x, y))
+        {
+            return false;
+        }
+
+        value = sampled[0];
+        alpha = sampled[1];
+        return true;
     }
 
     bool CompositeData::could_be_on_seam(const GeometrySnapshot &snapshot,
@@ -667,7 +630,7 @@ namespace rsvp
         // where it is, or one whose bounds are not in the coordinates its
         // lookups take, could have a seam anywhere, and then this rules
         // nothing out.
-        return !snapshot.all_locate_pixels ||
+        return !snapshot.all_bounded ||
             snapshot.bounds.contains(x, y, bounds_margin);
     }
 

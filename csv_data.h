@@ -33,29 +33,36 @@ namespace rsvp
          */
         static std::shared_ptr<CSVData> read_csv(const std::string &filename);
 
-        virtual bool get_pixel_double(double &value,
-                                      const int x,
-                                      const int y,
-                                      const int band) const;
+        bool get_pixel_double(double &value,
+                              const int x,
+                              const int y,
+                              const int band) const override;
 
         /**
          * @brief Get the number of samples in each row.
          *
          * @return The number of samples per row.
          */
-        int get_width() const;
+        int get_width() const override;
 
         /**
          * @brief Get the number of rows of data.
          *
          * @return The number of rows of data.
          */
-        int get_height() const;
+        int get_height() const override;
 
         // CSV files have only a single band.
-        virtual int get_bands() const
+        int get_bands() const override
         {
             return 1;
+        }
+
+        /// A CSV is looked up by row and column, so that is where its pixels
+        /// are
+        TerrainBounds get_bounds() const override
+        {
+            return pixel_grid_bounds();
         }
 
         ~CSVData();

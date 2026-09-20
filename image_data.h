@@ -1,6 +1,7 @@
 #ifndef RSVP_IMAGE_DATA_IMAGE_DATA_H
 #define RSVP_IMAGE_DATA_IMAGE_DATA_H
 
+#include <algorithm>
 #include <cstdint>
 #include <memory>
 #include <string>
@@ -47,17 +48,28 @@ namespace rsvp
     void invalidate_geometry();
 
     /**
-     * @brief A struct to represent the spatial bounds of terrain data.
+     * @brief The extent of an image's pixels.
      *
-     * Bounds are specified in world coordinates (meters).
+     * Bounds run over the pixel centers, in the coordinates the image's
+     * lookups take: pixel indices for a bare image, world coordinates
+     * (meters) for a terrain placed by a transform.
      */
     struct TerrainBounds
     {
         bool valid = false;     ///< Whether the bounds are valid
-        double min_x = 0.0;     ///< Minimum X coordinate (meters)
-        double max_x = 0.0;     ///< Maximum X coordinate (meters)
-        double min_y = 0.0;     ///< Minimum Y coordinate (meters)
-        double max_y = 0.0;     ///< Maximum Y coordinate (meters)
+        double min_x = 0.0;     ///< Minimum X coordinate
+        double max_x = 0.0;     ///< Maximum X coordinate
+        double min_y = 0.0;     ///< Minimum Y coordinate
+        double max_y = 0.0;     ///< Maximum Y coordinate
+
+        /**
+         * How far outside the bounds a lookup can still land on a pixel: one
+         * pixel's pitch, in the same coordinates as the bounds. A lookup
+         * further out than this along either axis finds nothing.
+         *
+         * Zero means unknown, and rules nothing out.
+         */
+        double pixel_reach = 0.0;
 
         /**
          * @brief Check if the bounds are valid.
@@ -106,7 +118,31 @@ namespace rsvp
         }
 
         /**
+         * @brief Check whether a lookup at (x, y) could land on a pixel.
+         *
+         * This is the test a composite skips a child by, so it errs toward
+         * yes: a point is only ruled out when the bounds and the reach are
+         * both known and it lies beyond them.
+         *
+         * @param[in] x      The "x-like" coordinate to test
+         * @param[in] y      The "y-like" coordinate to test
+         * @param[in] margin Slack beyond the reach, as for `contains`
+         *
+         * @return false if a lookup at (x, y) certainly finds nothing. true
+         * means only that it might.
+         */
+        bool could_reach(double x, double y, double margin = 0.0) const
+        {
+            return !valid || pixel_reach <= 0.0 ||
+                contains(x, y, pixel_reach + margin);
+        }
+
+        /**
          * @brief Union this bounds with another bounds.
+         *
+         * A point within either's reach of the union is within the larger of
+         * the two reaches of it, and a reach that is unknown on either side
+         * stays unknown.
          */
         void merge(const TerrainBounds &other)
         {
@@ -125,6 +161,10 @@ namespace rsvp
             max_x = std::max(max_x, other.max_x);
             min_y = std::min(min_y, other.min_y);
             max_y = std::max(max_y, other.max_y);
+
+            pixel_reach = (pixel_reach > 0.0 && other.pixel_reach > 0.0)
+                ? std::max(pixel_reach, other.pixel_reach)
+                : 0.0;
         }
     };
 
@@ -236,6 +276,31 @@ namespace rsvp
         {
             return value > 0.0 ? static_cast<int>(value + 0.5) :
                                  static_cast<int>(value - 0.5);
+        }
+
+
+        /**
+         * @brief The bounds of this image's own pixel grid, in pixel indices.
+         *
+         * For an image that holds a grid of pixels to return from
+         * `get_bounds`: the pixel centers, reaching one pixel past them.
+         *
+         * @return Invalid bounds if the grid is empty.
+         */
+        TerrainBounds pixel_grid_bounds() const
+        {
+            TerrainBounds bounds;
+
+            if (get_width() < 1 || get_height() < 1)
+            {
+                return bounds;
+            }
+
+            bounds.valid = true;
+            bounds.max_x = get_width() - 1;
+            bounds.max_y = get_height() - 1;
+            bounds.pixel_reach = 1.0;
+            return bounds;
         }
 
     public:
@@ -354,6 +419,33 @@ namespace rsvp
             double &value, double &weight, double x, double y, int band) const;
 
         /**
+         * @brief Get the interpolated values of several bands at one point.
+         *
+         * A composite wants a child's data and its alpha at the same point,
+         * and asking for them a band at a time repeats the walk down the
+         * child's chain of wrappers - the inverse transform, the offset, the
+         * search for the corners - once per band. This makes the walk once:
+         * a wrapper transforms the point and hands the whole request down,
+         * and an image reads every band from the same corners.
+         *
+         * The default asks for the bands one at a time.
+         *
+         * @param[out] values The interpolated value of each of `bands`, in
+         * the same order. Unspecified when this returns false.
+         * @param[in]  bands  The bands to sample
+         * @param[in]  count  How many bands there are
+         * @param[in]  x      The "x-like" coordinate of the pixel of interest
+         * @param[in]  y      The "y-like" coordinate of the pixel of interest
+         *
+         * @return true if (x, y) was within bounds and every band was valid
+         */
+        virtual bool get_interpolated_bands_double(double *values,
+                                                   const int *bands,
+                                                   int count,
+                                                   double x,
+                                                   double y) const;
+
+        /**
          * @brief Get the uninterpolated pixel band value as an integer.
          *
          * The indexing standard used throughout these classes is (x, y)
@@ -414,39 +506,29 @@ namespace rsvp
         }
 
         /**
-         * @brief Get the spatial bounds of this terrain data in world
-         * coordinates.
+         * @brief Where this image's pixels are, in the coordinates its
+         * lookups take.
          *
-         * This method queries the underlying image data format (e.g., VICAR
-         * labels) to determine the real-world extent of the data. For composite
-         * images, this returns the union of all constituent image bounds.
+         * Bounds run over the pixel centers. For a bare image they are pixel
+         * indices; for a terrain placed by a transform they are world
+         * coordinates, in meters; for a composite they are the union of its
+         * children's. Whichever it is, they are in the coordinates a lookup on
+         * this image takes, which is what lets a composite skip a child by
+         * them. Where a VICAR file's labels say it sits in the world is a
+         * different question, answered by `VicarData::get_map_bounds`.
          *
-         * @return TerrainBounds struct containing the spatial extent in meters,
-         * or an invalid bounds if the data does not have spatial information.
+         * @return Invalid bounds unless overridden. An image holding a pixel
+         * grid of its own reports it with `pixel_grid_bounds`. The default is
+         * left invalid rather than derived from `get_width` and `get_height`
+         * because a wrapper that forwards those without overriding this would
+         * then report its stored image's grid in a frame its own lookups do
+         * not take, and a composite would skip it by bounds that are not where
+         * its pixels are. An image with invalid bounds is never skipped.
          */
         virtual TerrainBounds get_bounds() const
         {
             // Default implementation returns invalid bounds
             return TerrainBounds();
-        }
-
-        /**
-         * @brief Whether `get_bounds` is expressed in the same coordinates
-         * that the pixel lookups take.
-         *
-         * A `TranslatedData` places a pixel grid with its transform, so the
-         * bounds it reports are exactly where its lookups find pixels. A bare
-         * `VicarData`, by contrast, reports where its labels say it sits in
-         * the world while its lookups are in pixel indices. A composite may
-         * only skip a child by its bounds when the two agree, so this is the
-         * question it asks first.
-         *
-         * @return false unless overridden: an image that has not said
-         * otherwise is never skipped by its bounds.
-         */
-        virtual bool bounds_locate_pixels() const
-        {
-            return false;
         }
 
         /**

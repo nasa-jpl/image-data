@@ -193,14 +193,27 @@ namespace rsvp
             return transformed_image ? transformed_image->get_height() : 0;
         }
 
-        TerrainBounds get_bounds() const override;
+        /**
+         * @brief Sample several bands of the stored image at one transformed
+         * point.
+         *
+         * @see ImageData::get_interpolated_bands_double
+         */
+        bool get_interpolated_bands_double(double *values,
+                                           const int *bands,
+                                           int count,
+                                           double x,
+                                           double y) const override;
 
         /**
-         * @brief True when this transform is what places the pixels: either
-         * the stored image has a grid of its own, or it already locates its
-         * pixels and we transform where it says they are.
+         * @brief Where this transform puts the stored image's pixels.
+         *
+         * The stored image's bounds, transformed, with its reach scaled up by
+         * the most the transform stretches anything.
+         *
+         * @return Invalid bounds if the stored image does not know its own.
          */
-        bool bounds_locate_pixels() const override;
+        TerrainBounds get_bounds() const override;
     };
 }
 
