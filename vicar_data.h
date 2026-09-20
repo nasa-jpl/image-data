@@ -361,6 +361,10 @@ namespace rsvp
         /*
          * @brief Get a pixel of the image as a double value
          *
+         * Final because the interpolating lookups and `write_vicarfile` read
+         * the pixel buffer directly rather than through this, so an override
+         * would be honoured by some lookups and not others.
+         *
          * @param value Output variable, the value of the pixel
          * @param sample The x coord of the pixel
          * @param line The y coord of the pixel
@@ -371,7 +375,7 @@ namespace rsvp
         inline bool get_pixel_double(double &value,
                                      int sample,
                                      int line,
-                                     int band) const override
+                                     int band) const final
         {
             if (line < 0 || sample < 0 || band < 0)
             {
@@ -390,36 +394,32 @@ namespace rsvp
         /**
          * @brief Bilinearly interpolate straight out of the pixel buffer.
          *
-         * The default implementation fetches each of the four corners through
-         * a virtual call that checks its bounds on its own. This is the image
-         * at the bottom of every terrain stack, so check the four corners at
-         * once and read them directly. The arithmetic is the same as the
-         * default's, in the same order, so the result is identical.
+         * One band through the several-band path, which is where the fast
+         * path lives.
+         *
+         * @see get_interpolated_bands_double
          */
         bool get_interpolated_pixel_double(double &value,
                                            double x,
                                            double y,
                                            int band) const override
         {
-            if (!get_interpolating())
-            {
-                return get_pixel_double(
-                    value, round_to_int(x), round_to_int(y), band);
-            }
-
-            const BilinearCorners corners = bilinear_corners(x, y);
-
-            if (!corners_in_image(corners) || band < 0 || band >= NB)
-            {
-                return false;
-            }
-
-            value = interpolate_corners(corners, band);
-            return true;
+            return get_interpolated_bands_double(&value, &band, 1, x, y);
         }
 
         /**
          * @brief Interpolate several bands from the same four corners.
+         *
+         * The default implementation fetches each of the four corners through
+         * a virtual call that checks its bounds on its own. This is the image
+         * at the bottom of every terrain stack, so check the four corners at
+         * once and read them directly. The arithmetic is the same as the
+         * default's, in the same order, so the result is identical.
+         *
+         * The uninterpolated branch is spelled out rather than left to the
+         * default, which asks for the bands one at a time through
+         * `get_interpolated_pixel_double` - and that comes straight back
+         * here.
          *
          * @see ImageData::get_interpolated_bands_double
          */

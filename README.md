@@ -76,6 +76,31 @@ int main()
 }
 ```
 
+## Bounds
+
+`ImageData::get_bounds` reports where an image's pixels are in the
+coordinates its own lookups take: pixel indices for a bare `VicarData`,
+`PGMData` or `CSVData`, world coordinates for an image placed by a
+`TranslatedData`, and the union of its children's for a composite. This is
+what lets a composite skip a child that cannot cover a point.
+
+Earlier releases had `VicarData::get_bounds` answer a different question:
+where the file's `SURFACE_PROJECTION_PARMS` labels place it in the world, in
+meters. That answer is now `VicarData::get_map_bounds`. Code that sized a
+viewport or checked terrain extent from a `VicarData`'s bounds should call
+`get_map_bounds` instead; the signature of `get_bounds` did not change, so
+the compiler will not point this out.
+
+Earlier releases also had `TranslatedData` place an image by its
+`get_width` and `get_height` when the image reported no bounds of its own.
+It no longer does, because a width and height forwarded from under another
+transform are not in the coordinates the transform applies to, and placing
+them as though they were had composites skipping images where their pixels
+are. An `ImageData` subclass that holds a pixel grid should now override
+`get_bounds` to return `pixel_grid_bounds()`, as the classes here do. One
+that does not is in an unknown place: it is never skipped by a composite,
+but it does not contribute to the composite's bounds either.
+
 ## Build
 ```bash
 mkdir build

@@ -341,8 +341,13 @@ namespace rsvp
 
             const ImageData &image = *images[i];
 
-            // The score and the value, from one walk down the child
-            const int bands[2] = {info.declared_alpha_band, b};
+            // The score and the value, from one walk down the child. The
+            // band the child scores by is asked for rather than read from
+            // the snapshot: a child whose `set_alpha_band` does not reach
+            // `ImageData::set_alpha_band` never invalidates the snapshot,
+            // and this must not go on scoring it by a band it has moved
+            // away from.
+            const int bands[2] = {image.get_alpha_band(), b};
             double sampled[2] = {0.0, 0.0};
 
             if (!image.get_interpolated_bands_double(sampled, bands, 2, x, y))
@@ -442,7 +447,6 @@ namespace rsvp
 
             if (one.bands != other.bands ||
                 one.alpha_band != other.alpha_band ||
-                one.declared_alpha_band != other.declared_alpha_band ||
                 !same_bounds(one.bounds, other.bounds))
             {
                 return false;
@@ -490,7 +494,6 @@ namespace rsvp
 
             info.bounds = image->get_bounds();
             info.bands = image->get_bands();
-            info.declared_alpha_band = image->get_alpha_band();
             info.alpha_band = get_alpha_band_of(*image);
 
             snapshot->bounds.merge(info.bounds);

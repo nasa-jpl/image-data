@@ -248,6 +248,11 @@ namespace rsvp
 
         if (!inner.valid)
         {
+            // Not derived from the stored image's width and height either:
+            // those may be forwarded from under another transform, and
+            // placing that grid as though the other transform were not
+            // there would have a composite skip this image where its pixels
+            // are. An image in an unknown place is never skipped.
             return inner;
         }
 

@@ -212,6 +212,9 @@ namespace rsvp
          * the most the transform stretches anything.
          *
          * @return Invalid bounds if the stored image does not know its own.
+         * An image that holds a grid reports it by overriding `get_bounds`
+         * with `pixel_grid_bounds`; one that does not is in an unknown
+         * place, which is never skipped.
          */
         TerrainBounds get_bounds() const override;
     };

@@ -1,10 +1,13 @@
+#include <composite_data.h>
 #include <csv_data.h>
 #include <image_data.h>
 #include <mod_data.cc>
 #include <mod_data.h>
 #include <pgm_data.h>
 #include <platform.h>
+#include <translated_data.h>
 #include <vicar_data.h>
+#include <z_offset_data.h>
 
 #include <img_data_gtest/gtest.h>
 #include <test_utils/test_utils.h>
@@ -13,6 +16,8 @@
 #include <cmath>
 #include <cstdint>
 #include <fstream>
+#include <limits>
+#include <list>
 #include <string>
 #include <vector>
 
@@ -1034,4 +1039,166 @@ TEST(csv_data, fields_parse_as_numbers)
     }
 
     ASSERT_TRUE(image_data::image_data_test_rm_directory(tmp_dir) == 0);
+}
+
+// Every record of a VICAR file - not every N1 - carries its own binary
+// prefix, and the pixels come after it
+TEST(vicar_data, binary_prefixes_precede_every_record)
+{
+    const std::string tmp_dir =
+        image_data::image_data_test_mkdtemp("/tmp/tmp.XXXXXX");
+    ASSERT_TRUE(tmp_dir.length() != 0);
+    const std::string path = tmp_dir + "/prefixed.vic";
+
+    // Three lines of two samples, band interleaved by line, each record led
+    // by a two-byte prefix that is not pixel data. More records than there
+    // are samples in one, so that counting a prefix per N1 would come up
+    // short.
+    const std::vector<uint8_t> records {
+        0xAA, 0xBB, 1, 2, //
+        0xAA, 0xBB, 3, 4, //
+        0xAA, 0xBB, 5, 6, //
+    };
+    write_synthetic_vicar(path,
+                          "FORMAT='BYTE'  TYPE='IMAGE'  BUFSIZ=4  DIM=3  "
+                          "EOL=0  RECSIZE=4  ORG='BIL'  NL=3  NS=2  NB=1  "
+                          "N1=2  N2=1  N3=3  N4=0  NBB=2  NLB=0  "
+                          "INTFMT='LOW'  REALFMT='RIEEE'",
+                          records);
+
+    std::shared_ptr<rsvp::VicarData> image;
+    ASSERT_NO_THROW(image = rsvp::VicarData::read_vicarfile(path));
+    ASSERT_TRUE(image != nullptr);
+    EXPECT_EQ(image->get_binary_prefix_byte_count(), 2);
+
+    for (int y = 0; y < 3; y++)
+    {
+        for (int x = 0; x < 2; x++)
+        {
+            double value = -1.0;
+            EXPECT_TRUE(image->get_pixel_double(value, x, y, 0));
+            EXPECT_EQ(value, 1 + x + 2 * y) << x << ", " << y;
+        }
+    }
+
+    ASSERT_TRUE(image_data::image_data_test_rm_directory(tmp_dir) == 0);
+}
+
+// A file that ends before its pixels do is refused, not padded with zeros
+TEST(vicar_data, a_truncated_file_is_an_error)
+{
+    const std::string tmp_dir =
+        image_data::image_data_test_mkdtemp("/tmp/tmp.XXXXXX");
+    ASSERT_TRUE(tmp_dir.length() != 0);
+    const std::string path = tmp_dir + "/short.vic";
+
+    // Two lines of three samples promised, one and a half delivered
+    const std::vector<uint8_t> pixels {1, 2, 3, 4};
+    write_synthetic_vicar(path,
+                          "FORMAT='BYTE'  TYPE='IMAGE'  BUFSIZ=3  DIM=3  "
+                          "EOL=0  RECSIZE=3  ORG='BSQ'  NL=2  NS=3  NB=1  "
+                          "N1=3  N2=2  N3=1  N4=0  NBB=0  NLB=0  "
+                          "INTFMT='LOW'  REALFMT='RIEEE'",
+                          pixels);
+
+    EXPECT_THROW(rsvp::VicarData::read_vicarfile(path), std::runtime_error);
+
+    ASSERT_TRUE(image_data::image_data_test_rm_directory(tmp_dir) == 0);
+}
+
+// A PGM that ends before its pixels do is refused too
+TEST(pgm_data, a_truncated_file_is_an_error)
+{
+    const std::string tmp_dir =
+        image_data::image_data_test_mkdtemp("/tmp/tmp.XXXXXX");
+    ASSERT_TRUE(tmp_dir.length() != 0);
+    const std::string path = tmp_dir + "/short.pgm";
+
+    std::ofstream file(path, std::ofstream::binary | std::ofstream::trunc);
+    file << "P5\n2 2\n255\n";
+    file.put(1);
+    file.put(2);
+    file.put(3);
+    file.close();
+
+    EXPECT_THROW(rsvp::PGMData::read_pgm(path), std::runtime_error);
+
+    ASSERT_TRUE(image_data::image_data_test_rm_directory(tmp_dir) == 0);
+}
+
+// A coordinate too far out to hold in an int is outside every image, and
+// must say so rather than be cast
+TEST(vicar_data, coordinates_beyond_int_range_are_out_of_bounds)
+{
+    const auto shared =
+        std::make_shared<rsvp::VicarData>(3, 3, 1, rsvp::VicarData::REAL);
+    rsvp::VicarData &image = *shared;
+    for (int y = 0; y < 3; y++)
+    {
+        for (int x = 0; x < 3; x++)
+        {
+            image.set_pixel_double(1.0, x, y, 0);
+        }
+    }
+
+    const double far_out[] = {3.0e9,
+                              -3.0e9,
+                              1.0e300,
+                              std::numeric_limits<double>::infinity(),
+                              std::numeric_limits<double>::quiet_NaN()};
+
+    for (int interpolating = 0; interpolating < 2; interpolating++)
+    {
+        image.set_interpolating(interpolating);
+
+        for (const double coordinate : far_out)
+        {
+            double value = 0.0;
+            EXPECT_FALSE(
+                image.get_interpolated_pixel_double(value, coordinate, 1.0, 0))
+                << coordinate;
+            EXPECT_FALSE(
+                image.get_interpolated_pixel_double(value, 1.0, coordinate, 0))
+                << coordinate;
+            EXPECT_FALSE(image.ImageData::get_interpolated_pixel_double(
+                value, coordinate, 1.0, 0))
+                << coordinate;
+
+            // And through a transform whose inverse lands there
+            const rsvp::TranslatedData placed(
+                shared, coordinate, 0.0, 1.0, 0.0);
+            EXPECT_FALSE(placed.get_interpolated_pixel_double(
+                value, 1.0 - coordinate, 1.0, 0))
+                << coordinate;
+        }
+    }
+
+    // Right at the edge of what fits, the answer is still just "outside"
+    double value = 0.0;
+    EXPECT_FALSE(image.get_interpolated_pixel_double(value, 2147483646.5, 1.0, 0));
+    EXPECT_FALSE(image.get_interpolated_pixel_double(value, -2147483647.5, 1.0, 0));
+}
+
+// An alpha_band the image does not have is a mistake in the .mod file, and
+// is reported as one rather than rendering the image as no data
+TEST(mod_data, alpha_band_out_of_range_is_an_error)
+{
+    const auto my_root = std::string(IMG_DATA_TEST_SOURCE_DIR);
+    const auto image = rsvp::ImageData::read(
+        my_root + "/unit_test_data/image_data/hemisphere.mod");
+    ASSERT_TRUE(image != nullptr);
+    ASSERT_EQ(image->get_bands(), 1);
+
+    std::list<std::string> too_high = {"[", "alpha_band", "1", "]"};
+    EXPECT_THROW(rsvp::apply_properties(image, &too_high, "test.mod"),
+                 std::runtime_error);
+
+    std::list<std::string> in_range = {"[", "alpha_band", "0", "]"};
+    EXPECT_TRUE(rsvp::apply_properties(image, &in_range, "test.mod"));
+    EXPECT_EQ(image->get_alpha_band(), 0);
+
+    // Negative means no alpha band, which any image can have
+    std::list<std::string> none = {"[", "alpha_band", "-1", "]"};
+    EXPECT_TRUE(rsvp::apply_properties(image, &none, "test.mod"));
+    EXPECT_EQ(image->get_alpha_band(), -1);
 }

@@ -66,9 +66,17 @@ namespace rsvp
         const size_t data_size = static_cast<size_t>(result->height) *
             result->width * result->pixel_byte_count;
 
-        result->pixels.resize(data_size);
-        pgm_file.read(reinterpret_cast<char *>(result->pixels.data()),
+        // Left uninitialized, since the read fills all of it or the file is
+        // rejected
+        result->pixels = std::unique_ptr<uint8_t[]>(new uint8_t[data_size]);
+        pgm_file.read(reinterpret_cast<char *>(result->pixels.get()),
                       static_cast<std::streamsize>(data_size));
+
+        if (static_cast<size_t>(pgm_file.gcount()) != data_size)
+        {
+            throw std::runtime_error(filename +
+                                     ": File ends before its pixels do");
+        }
 
         return result;
     }

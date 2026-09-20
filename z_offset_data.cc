@@ -26,8 +26,17 @@ namespace rsvp
 
         if (!has_band(band))
         {
-            // The stored image has gained bands since the tables were sized
-            const size_t bands = static_cast<size_t>(band) + 1;
+            // Either the stored image has gained bands since the tables were
+            // sized, or this is a band it does not have. Only the first grows
+            // the tables: `band_in_range` takes a band with an entry to be
+            // one the stored image has, so an entry must never be made for a
+            // band it does not.
+            if (band >= get_bands())
+            {
+                return;
+            }
+
+            const size_t bands = static_cast<size_t>(get_bands());
             scales.resize(bands, 1.0);
             offsets.resize(bands, 0.0);
         }

@@ -215,6 +215,25 @@ namespace rsvp
          */
         static BilinearCorners bilinear_corners(double x, double y)
         {
+            // Converting a double to an int is undefined unless the value
+            // fits, and a target that saturates lands the far corner at
+            // INT_MAX + 1, which wraps to the near side of every bounds
+            // check. A coordinate that far out - or a NaN, which fails every
+            // comparison - cannot be in any image, so send it to a corner
+            // that is certainly outside one instead of casting it.
+            //
+            // The limits leave room for the +1 on the far corner and the
+            // decrement on the near one.
+            if (!(x > -2147483647.0 && x < 2147483646.0))
+            {
+                x = -1.0;
+            }
+
+            if (!(y > -2147483647.0 && y < 2147483646.0))
+            {
+                y = -1.0;
+            }
+
             // We sample at (x0, y0) and (x0 + 1, y0 + 1), so those two must
             // span the input, which means rounding down rather than toward
             // zero. Getting that wrong for coordinates in (-1, 0) - leaving
@@ -271,11 +290,22 @@ namespace rsvp
          *
          * Used both to snap a coordinate to a whole pixel for uninterpolated
          * lookups and to round a value for the integer accessors.
+         *
+         * A value that does not fit in an int saturates - and a NaN, which
+         * fails every comparison, comes out as INT_MIN - since converting it
+         * would be undefined. As a coordinate, either end is outside every
+         * image.
          */
         static int round_to_int(double value)
         {
-            return value > 0.0 ? static_cast<int>(value + 0.5) :
-                                 static_cast<int>(value - 0.5);
+            if (value > 0.0)
+            {
+                return value < 2147483647.0 ? static_cast<int>(value + 0.5) :
+                                              2147483647;
+            }
+
+            return value > -2147483648.0 ? static_cast<int>(value - 0.5) :
+                                           (-2147483647 - 1);
         }
 
 
@@ -333,6 +363,11 @@ namespace rsvp
 
         /**
          * @brief Set the image band associated with the alpha blending value.
+         *
+         * A composite caches which band of each child it blends by, and only
+         * learns that this has changed through `invalidate_geometry`, which
+         * this calls. An override must therefore call this as well as
+         * whatever else it does.
          *
          * @param[in] band The alpha image band
          */

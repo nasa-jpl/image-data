@@ -1608,3 +1608,65 @@ TEST(composite_data, a_missing_alpha_band_is_no_data_rather_than_an_error)
             composite->get_interpolated_pixel_double(value, 1.0, 1.0, 0)));
     }
 }
+
+namespace
+{
+    // A child whose set_alpha_band keeps the band to itself rather than
+    // reaching ImageData::set_alpha_band, so nothing it does invalidates a
+    // composite's cached geometry
+    class SelfKeepingAlphaImage final : public CompositeTestImage
+    {
+    private:
+        int own_alpha_band = -1;
+
+    public:
+        SelfKeepingAlphaImage() :
+            CompositeTestImage(3)
+        {
+        }
+
+        void set_alpha_band(const int band) override
+        {
+            own_alpha_band = band;
+        }
+
+        int get_alpha_band() const override
+        {
+            return own_alpha_band;
+        }
+    };
+}
+
+// A scored composite scores each child by the band the child says it
+// scores by now, not the one it said when the composite last looked
+TEST(composite_data, scored_composite_asks_a_child_for_its_alpha_band)
+{
+    const auto plain = std::make_shared<SelfKeepingAlphaImage>();
+
+    // The rescaled child's band 2 scores between the plain child's band 2
+    // and its band 1, so which of those the plain child is scored by decides
+    // the winner, and the rescaled child never has to change
+    const auto rescaled = std::make_shared<rsvp::ZOffsetData>(
+        std::make_shared<CompositeTestImage>(3));
+    rescaled->set_offset_and_scale(0, 1000.0, 1.0);
+    rescaled->set_offset_and_scale(2, 0.0, 0.5);
+
+    plain->set_alpha_band(2);
+    rescaled->set_alpha_band(2);
+
+    rsvp::ScoredCompositeData composite;
+    composite.add_image(plain);
+    composite.add_image(rescaled);
+
+    // Scored by band 2, the plain child wins
+    double value = 0.0;
+    ASSERT_TRUE(composite.get_interpolated_pixel_double(value, 1.0, 1.0, 0));
+    EXPECT_DOUBLE_EQ(value, 5.0);
+
+    // Scored by band 1, the rescaled one does, even though the plain child
+    // told nobody that its band moved
+    plain->set_alpha_band(1);
+
+    ASSERT_TRUE(composite.get_interpolated_pixel_double(value, 1.0, 1.0, 0));
+    EXPECT_DOUBLE_EQ(value, 1005.0);
+}

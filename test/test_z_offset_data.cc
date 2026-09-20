@@ -489,6 +489,70 @@ TEST(z_offset_data, bands_the_image_lacks_are_out_of_range)
     EXPECT_TRUE(offset.get_pixel_double(value, 0, 0, 0));
 }
 
+namespace
+{
+    // A one-band image that, like a PGM, answers for whatever band it is
+    // asked about, so the band check is the ZOffsetData's to make
+    class BandBlindTestImage : public rsvp::ImageData
+    {
+    public:
+        int get_bands() const override
+        {
+            return 1;
+        }
+
+        int get_width() const override
+        {
+            return 2;
+        }
+
+        int get_height() const override
+        {
+            return 2;
+        }
+
+        bool get_pixel_double(double &value,
+                              const int x,
+                              const int y,
+                              const int /*band*/) const override
+        {
+            if (x < 0 || x >= 2 || y < 0 || y >= 2)
+            {
+                return false;
+            }
+
+            value = 7.0;
+            return true;
+        }
+    };
+}
+
+// Giving a band the stored image does not have an offset and scale must not
+// make it look like one it does
+TEST(z_offset_data, a_band_the_image_lacks_stays_out_of_range_once_scaled)
+{
+    rsvp::ZOffsetData offset(std::make_shared<BandBlindTestImage>());
+
+    offset.set_offset_and_scale(5, 100.0, 2.0);
+    EXPECT_EQ(offset.get_bands(), 1);
+
+    double value = 0.0;
+    EXPECT_FALSE(offset.get_pixel_double(value, 0, 0, 5));
+    EXPECT_FALSE(offset.get_interpolated_pixel_double(value, 0.0, 0.0, 5));
+    EXPECT_FALSE(offset.get_interpolated_pixel_double(value, 0.5, 0.5, 1));
+
+    double weight = 0.0;
+    EXPECT_FALSE(offset.get_clamped_pixel_double(value, weight, 0.0, 0.0, 5));
+
+    int bands[2] = {0, 5};
+    double values[2] = {0.0, 0.0};
+    EXPECT_FALSE(
+        offset.get_interpolated_bands_double(values, bands, 2, 0.0, 0.0));
+
+    ASSERT_TRUE(offset.get_pixel_double(value, 0, 0, 0));
+    EXPECT_DOUBLE_EQ(value, 7.0);
+}
+
 // The offset and scale tables are sized when the ZOffsetData is built, and a
 // stored container can gain bands after that. Those bands pass through
 // unchanged until they are given an offset and scale, rather than being

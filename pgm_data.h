@@ -4,7 +4,7 @@
 #include "image_data.h"
 
 #include <cstdint>
-#include <vector>
+#include <memory>
 
 
 namespace rsvp
@@ -79,7 +79,7 @@ namespace rsvp
 
         // The raster as stored in the file: one byte per pixel, or two with
         // the most significant first
-        std::vector<uint8_t> pixels;
+        std::unique_ptr<uint8_t[]> pixels;
 
         PGMData() = default;
 

@@ -601,11 +601,17 @@ namespace rsvp
             static_cast<std::streamoff>(result->get_record_size()) *
                 result->NLB; // Binary header
 
-        const size_t data_length = static_cast<size_t>(result->get_n1()) *
-            (result->get_binary_prefix_byte_count() + // Label bytes per line
-             static_cast<size_t>(result->get_n2()) *  // Logical samples
-                 result->get_n3() *                   // Logical bands
-                 result->get_pixel_byte_count());     // Bytes per pixel
+        // The image area is N2 * N3 records, each a binary prefix of NBB
+        // bytes followed by N1 pixels
+        const size_t run_bytes = static_cast<size_t>(result->get_n1()) *
+            result->get_pixel_byte_count();
+        const size_t record_bytes =
+            static_cast<size_t>(result->get_binary_prefix_byte_count()) +
+            run_bytes;
+        const size_t slab_bytes =
+            static_cast<size_t>(result->get_n2()) * record_bytes;
+        const size_t data_length =
+            static_cast<size_t>(result->get_n3()) * slab_bytes;
 
         // Append any EOL labels
         if (comments.find("EOL=1") != std::string::npos)
@@ -661,43 +667,41 @@ namespace rsvp
         // Read the pixel data
         ht_file.seekg(data_offset, std::ios::beg);
 
-        std::vector<uint8_t> data_array(data_length);
-        ht_file.read(reinterpret_cast<char *>(data_array.data()),
-                     static_cast<std::streamsize>(data_length));
-
-        // We're done with reading the file directly
-        ht_file.close();
-
-        // Process the pixel data in the data_array into the pixel array,
-        // which is always BSQ. Each run of N1 raw pixels is contiguous in the
+        // Decode the raw pixels into the pixel array, which is always BSQ,
+        // a slab of N2 records at a time: a band of a BSQ file, a line of a
+        // BIL or BIP one. Each run of N1 raw pixels is contiguous in the
         // file; where it lands in the pixel array depends on the
         // organization:
         //
         // BSQ  n1 = sample     n2 = line       n3 = band
         // BIL  n1 = sample     n2 = band       n3 = line
         // BIP  n1 = band       n2 = sample     n3 = line
-        const int fmt_size = result->get_pixel_byte_count();
+        //
+        // The slab buffer is left uninitialized, since the read fills all of
+        // it or the file is rejected.
         const size_t plane = static_cast<size_t>(result->NL) * result->NS;
-        const size_t run_bytes = static_cast<size_t>(result->N1) * fmt_size;
 
         result->pixel_data = std::unique_ptr<double[]>(
             new double[plane * static_cast<size_t>(result->NB)]);
 
+        const std::unique_ptr<uint8_t[]> slab(new uint8_t[slab_bytes]);
+
         for (int n3 = 0; n3 < result->N3; n3++)
         {
-            const size_t n3_offset =
-                static_cast<size_t>(n3) * result->NBB + // Prior lines'
-                                                        // prefixes
-                static_cast<size_t>(n3) * result->N2 * run_bytes + // Prior
-                                                                   // lines'
-                                                                   // data
-                result->NBB; // Current line's prefix
+            ht_file.read(reinterpret_cast<char *>(slab.get()),
+                         static_cast<std::streamsize>(slab_bytes));
+
+            if (static_cast<size_t>(ht_file.gcount()) != slab_bytes)
+            {
+                throw std::runtime_error(
+                    path + ": File ends before its pixel data does");
+            }
 
             for (int n2 = 0; n2 < result->N2; n2++)
             {
-                const size_t offset = n3_offset +
-                    static_cast<size_t>(n2) * run_bytes; // This line's prior
-                                                         // samples
+                // This record's pixels, after its binary prefix
+                const uint8_t *source = slab.get() +
+                    static_cast<size_t>(n2) * record_bytes + result->NBB;
 
                 double *destination = result->pixel_data.get();
                 size_t stride = 1;
@@ -716,7 +720,7 @@ namespace rsvp
                     break;
                 }
 
-                decode(&data_array[offset], destination, result->N1, stride);
+                decode(source, destination, result->N1, stride);
             }
         }
 

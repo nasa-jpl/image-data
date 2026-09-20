@@ -54,15 +54,13 @@ namespace rsvp
             /// How many bands the child has.
             int bands = 0;
 
-            /// Which of those bands carries alpha, or -1 for none.
-            int alpha_band = -1;
-
             /**
-             * The band the child itself declares as alpha, or -1 if it
-             * declares none. `alpha_band` is what compositing resolves that
-             * to; a scored composite goes by the declaration alone.
+             * Which of those bands carries alpha, or -1 for none: what
+             * alpha blending resolves the child's own declaration to. Good
+             * for as long as the child reaches `ImageData::set_alpha_band`
+             * whenever its declaration changes.
              */
-            int declared_alpha_band = -1;
+            int alpha_band = -1;
         };
 
         /**

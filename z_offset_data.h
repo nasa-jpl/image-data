@@ -29,7 +29,9 @@ namespace rsvp
          * Checked against the tables rather than the stored image's band
          * count, which would cost a walk down the wrappers on every pixel.
          * The tables are sized to that count when this is constructed, and
-         * grow when a later band is given an offset and scale.
+         * grow to it again when a band the stored image has gained since is
+         * given an offset and scale. They are never longer than it, so an
+         * entry means the stored image had the band when it was made.
          */
         bool has_band(int band) const
         {
@@ -168,7 +170,8 @@ namespace rsvp
         /**
          * @brief Set the offset and scale for a band of the stored image.
          *
-         * A negative band is ignored.
+         * A band the stored image does not have is ignored, as is a
+         * negative one.
          *
          * @param band      The band of the image to transform
          * @param offset    The offset to apply to the band's data

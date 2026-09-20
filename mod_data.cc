@@ -146,6 +146,20 @@ namespace rsvp
 
                 // Pop off the value
                 tokens->pop_front();
+
+                // A band the image does not have would never be noticed
+                // otherwise: a composite blending by it treats every pixel
+                // of the image as no data, silently. A negative band means
+                // no alpha band at all, which is allowed.
+                if (alpha_band >= image->get_bands())
+                {
+                    throw std::runtime_error(
+                        filename + ": alpha_band " +
+                        std::to_string(alpha_band) +
+                        " is out of range for an image with " +
+                        std::to_string(image->get_bands()) + " band(s)");
+                }
+
                 // Apply it to the image
                 image->set_alpha_band(alpha_band);
             }
