@@ -41,10 +41,8 @@ namespace rsvp
         {
             std::list<std::string> block;
 
-            block.push_back(tokens->front());
-            tokens->pop_front();
-
-            int stack_depth = 1;
+            // The opening `{` of the first iteration takes this to 1
+            int stack_depth = 0;
 
             for (;;)
             {
