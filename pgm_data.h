@@ -4,6 +4,7 @@
 #include "image_data.h"
 
 #include <cstdint>
+#include <vector>
 
 
 namespace rsvp
@@ -66,35 +67,49 @@ namespace rsvp
          */
     private:
         // Pixel count for image dimensions
-        int width;
-        int height;
+        int width = 0;
+        int height = 0;
 
         // PGM requires file to note their maximum value
         // This value must be above 0 and below 65536
-        int maximum_value;
+        int maximum_value = 0;
 
         // PGM files have either 8-bit or 16-bit pixel width
-        int pixel_byte_count;
+        int pixel_byte_count = 0;
 
-        // Offset in file for pixel data
-        int data_offset;
+        // The raster as stored in the file: one byte per pixel, or two with
+        // the most significant first
+        std::vector<uint8_t> pixels;
 
-        // Raw data from the file
-        // Pixels here will be casted and byte-swapped
-        // into the pixel_array
-        uint8_t *pixel_array_8;
-        uint16_t *pixel_array_16;
+        PGMData() = default;
 
-        // PGM is always stored in big-endian
-        // Flip if host is little-endian
-        bool opposite_endian;
+        // The value of a pixel, or false if (sample, line) is outside the
+        // image. The G in PGM is "gray" - bands don't matter!
+        bool read_pixel(int &value, int sample, int line) const
+        {
+            if (line < 0 || line >= height || sample < 0 || sample >= width)
+            {
+                // Out of bounds
+                return false;
+            }
 
-        PGMData();
+            const size_t index = static_cast<size_t>(width) * line + sample;
+
+            if (pixel_byte_count == 1)
+            {
+                value = pixels[index];
+            }
+            else
+            {
+                // PGM is always stored big-endian
+                value = (pixels[2 * index] << 8) | pixels[2 * index + 1];
+            }
+
+            return true;
+        }
 
     public:
         static std::shared_ptr<PGMData> read_pgm(const std::string &filename);
-
-        ~PGMData();
 
         int get_width() const override
         {
@@ -121,20 +136,23 @@ namespace rsvp
             return 1;
         }
 
-        // Return an exact pixel value as a double
+        // Return an exact pixel value as an int
         bool get_pixel_int(int &value,
                            int sample,
                            int line,
-                           int band) const override;
+                           int /*band*/) const override
+        {
+            return read_pixel(value, sample, line);
+        }
 
         // PGM files can only store integer data, so up-cast the integer value
         bool get_pixel_double(double &value,
                               const int sample,
                               const int line,
-                              const int band) const override
+                              const int /*band*/) const override
         {
             int intermediate = 0;
-            bool status = get_pixel_int(intermediate, sample, line, band);
+            const bool status = read_pixel(intermediate, sample, line);
 
             value = static_cast<double>(intermediate);
             return status;

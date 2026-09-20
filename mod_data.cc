@@ -8,7 +8,6 @@
 #include <stdexcept>
 
 #include <fstream>
-#include <iostream>
 #include <list>
 #include <sstream>
 #include <utility>
@@ -16,6 +15,66 @@
 
 namespace rsvp
 {
+
+    namespace
+    {
+        // The tokens run together, for an error message
+        std::string join_tokens(const std::list<std::string> &tokens)
+        {
+            std::string joined;
+            for (const auto &t : tokens)
+            {
+                joined += t;
+            }
+            return joined;
+        }
+
+        // Pop the block at the front of `tokens` - from its opening `{` to
+        // the matching (not just the next) `}` - into a list of its own, to
+        // be sent through another round of parsing.
+        //
+        // The front of `tokens` must be a `{`. Throws `missing_brace_error`
+        // if the tokens run out before the matching `}`.
+        std::list<std::string>
+        extract_block(std::list<std::string> *tokens,
+                      const std::string &missing_brace_error)
+        {
+            std::list<std::string> block;
+
+            block.push_back(tokens->front());
+            tokens->pop_front();
+
+            int stack_depth = 1;
+
+            for (;;)
+            {
+                if (tokens->empty())
+                {
+                    // We haven't found our final closing `}`, but we've run
+                    // out of tokens. Abort!
+                    throw std::runtime_error(missing_brace_error);
+                }
+
+                block.push_back(tokens->front());
+
+                if (tokens->front() == "{")
+                {
+                    stack_depth += 1;
+                }
+                else if (tokens->front() == "}")
+                {
+                    stack_depth -= 1;
+                }
+
+                tokens->pop_front();
+
+                if (stack_depth <= 0)
+                {
+                    return block;
+                }
+            }
+        }
+    }
 
     // Parse the `alpha_band` from the properties tokens
     static bool apply_properties(const std::shared_ptr<ImageData> &image,
@@ -37,15 +96,10 @@ namespace rsvp
         if (tokens->size() < 3 || tokens->front() != "[" ||
             tokens->back() != "]")
         {
-            std::string prop_string;
-            for (auto &t : *tokens)
-            {
-                prop_string += t;
-            }
             throw std::runtime_error(
                 filename +
                 ": Invalid property arguments in terrain mod file: " +
-                prop_string);
+                join_tokens(*tokens));
         }
 
         // Pop off the opening and closing brackets
@@ -154,16 +208,10 @@ namespace rsvp
 
         if (raw_result)
         {
-            const size_t extension_pos = filename.find_last_of('.');
-            const std::string extension =
-                (extension_pos == std::string::npos) ?
-                "" :
-                filename.substr(extension_pos + 1, std::string::npos);
-
             // Try to set the alpha channel appropriately for terrain
             // classification ".tc" files and heightmap ".ht" files.
             const auto alpha_band_to_set =
-                (extension == "tc" or extension == "TC") ? 1 : 2;
+                (get_file_extension(filename) == "tc") ? 1 : 2;
 
             raw_result->set_alpha_band(alpha_band_to_set);
 
@@ -338,16 +386,11 @@ namespace rsvp
 
         if (tokens->size() < 4 || tokens->front() != "zoffset")
         {
-            std::string argument_string;
-            for (auto &t : *tokens)
-            {
-                argument_string += t;
-            }
             throw std::runtime_error(
                 filename +
                 ": Invalid z offset argument form: expected form `{ "
                 "zoffset block z_offset z_scale }` but got `" +
-                argument_string + "`");
+                join_tokens(*tokens) + "`");
         }
 
         tokens->pop_front();
@@ -361,45 +404,9 @@ namespace rsvp
                 "block as first argument");
         }
 
-        // We now need to extract the embedded blocks
-        // We know that the next token is a "{" - so we build up a new list of
-        // tokens until we find the _matching_ (not just the next) "}"
-        // character, and then send it through another round of parsing
-        std::list<std::string> local_tokens;
-
-        local_tokens.push_back(tokens->front());
-        tokens->pop_front();
-
-        int stack_depth = 1;
-
-        for (;;)
-        {
-            local_tokens.push_back(tokens->front());
-
-            if (tokens->front() == "{")
-            {
-                stack_depth += 1;
-            }
-            else if (tokens->front() == "}")
-            {
-                stack_depth -= 1;
-            }
-
-            tokens->pop_front();
-
-            if (stack_depth <= 0)
-            {
-                break;
-            }
-
-            if (tokens->empty())
-            {
-                // We haven't found our final closing `}`, but we've run
-                // out of tokens. Abort!
-                throw std::runtime_error(
-                    filename + ": Z offset arguments missing closing `}`");
-            }
-        }
+        // Extract the embedded block
+        std::list<std::string> local_tokens = extract_block(
+            tokens, filename + ": Z offset arguments missing closing `}`");
 
         // We've extracted the embedded block, and now we need to extract the
         // offset and scale
@@ -473,16 +480,11 @@ namespace rsvp
 
         if (tokens->size() < 4 || tokens->front() != "deinterpolate")
         {
-            std::string argument_string;
-            for (auto &t : *tokens)
-            {
-                argument_string += t;
-            }
             throw std::runtime_error(
                 filename +
                 ": Invalid deinterpolate arguments: arguments should have the "
                 "form { deinterpolate block } but got " +
-                argument_string);
+                join_tokens(*tokens));
         }
 
         tokens->pop_front();
@@ -509,16 +511,11 @@ namespace rsvp
 
         if (tokens->size() < 2 || tokens->front() != "file")
         {
-            std::string argument_string;
-            for (auto &t : *tokens)
-            {
-                argument_string += t;
-            }
             throw std::runtime_error(
                 filename +
                 ": Invalid file arguments: arguments should have the "
                 "form { file filespec [ parameters ] } but got " +
-                argument_string);
+                join_tokens(*tokens));
         }
 
         // Pop off "file"
@@ -566,18 +563,11 @@ namespace rsvp
         // and must _not_ use `ModData::read_bare_vicarfile` to parse .ht and
         // .tc files to prevent double-transforming the data.
 
-        std::string extension;
-
-        size_t extension_pos = path.find_last_of('.');
-        if (extension_pos != std::string::npos)
-        {
-            extension = path.substr(extension_pos + 1, std::string::npos);
-        }
+        const std::string extension = get_file_extension(path);
 
         std::shared_ptr<ImageData> result;
 
-        if (extension == "ht" || extension == "HT" || extension == "tc" ||
-            extension == "TC")
+        if (extension == "ht" || extension == "tc")
         {
             // Parse .ht and .tc files as raw, untransformed vicar files
             result = VicarData::read_vicarfile(path);
@@ -597,11 +587,11 @@ namespace rsvp
 
         // Try to set the alpha channel appropriately for terrain
         // classification ".tc" files and heightmap ".ht" files.
-        if (extension == "tc" || extension == "TC")
+        if (extension == "tc")
         {
             result->set_alpha_band(1);
         }
-        else if (extension == "ht" || extension == "HT")
+        else if (extension == "ht")
         {
             result->set_alpha_band(2);
         }
@@ -638,17 +628,12 @@ namespace rsvp
              (tokens->front() != "composite" &&
               tokens->front() != "scoredmap")))
         {
-            std::string arg_string;
-            for (auto &t : *tokens)
-            {
-                arg_string += t;
-            }
             throw std::runtime_error(
                 filename +
                 ": Invalid composite arguments: expected arguments of the "
                 "form `composite|scoredmap "
                 "block_1 block_2 ... block_n [ parameters ]` but got: " +
-                arg_string);
+                join_tokens(*tokens));
         }
 
         std::string composite_type = tokens->front();
@@ -663,10 +648,6 @@ namespace rsvp
                 ": Invalid composite arguments: first block missing `{`");
         }
 
-        // We now need to extract the embedded blocks
-        // We know that the next token is a "{" - so we build up a new list of
-        // tokens until we find the _matching_ (not just the next) "}"
-        // character, and then send it through another round of parsing
         std::shared_ptr<CompositeData> result;
         if (composite_type == "composite")
         {
@@ -684,45 +665,14 @@ namespace rsvp
                 filename + ": Unable to create the image's CompositeData");
         }
 
+        // Parse each embedded block in turn
         while (not tokens->empty() and tokens->front() == "{")
         {
-            std::list<std::string> local_tokens;
-
-            local_tokens.push_back(tokens->front());
-            tokens->pop_front();
-
-            int stack_depth = 1;
-
-            for (;;)
-            {
-                local_tokens.push_back(tokens->front());
-
-                if (tokens->front() == "{")
-                {
-                    stack_depth += 1;
-                }
-                else if (tokens->front() == "}")
-                {
-                    stack_depth -= 1;
-                }
-
-                tokens->pop_front();
-
-                if (stack_depth <= 0)
-                {
-                    break;
-                }
-
-                if (tokens->empty())
-                {
-                    // We haven't found our final closing `}`, but we've run
-                    // out of tokens. Abort!
-                    throw std::runtime_error(
-                        filename +
-                        ": Invalid composite arguments: contains "
-                        "block missing closing `}`");
-                }
-            }
+            std::list<std::string> local_tokens = extract_block(
+                tokens,
+                filename +
+                    ": Invalid composite arguments: contains "
+                    "block missing closing `}`");
 
             std::shared_ptr<ImageData> embedded =
                 ModData::parse_imagedata(&local_tokens, filename);
@@ -740,17 +690,14 @@ namespace rsvp
 
         // Try to set the alpha band appropriately for composited heightmaps
         // (.mod files) and composited terrain classifications (.mod_tc files)
-        size_t extension_pos = filename.find_last_of('.');
-        if (extension_pos != std::string::npos)
+        const std::string file_extension = get_file_extension(filename);
+        if (!file_extension.empty())
         {
-            std::string file_extension =
-                filename.substr(extension_pos + 1, std::string::npos);
-
-            if (file_extension == "mod" || file_extension == "MOD")
+            if (file_extension == "mod")
             {
                 result->set_alpha_band(2);
             }
-            else if (file_extension == "mod_tc" || file_extension == "MOD_TC")
+            else if (file_extension == "mod_tc")
             {
                 result->set_alpha_band(1);
             }
@@ -766,15 +713,10 @@ namespace rsvp
 
         if (!tokens->empty())
         {
-            std::string arg_string;
-            for (auto &t : *tokens)
-            {
-                arg_string += t;
-            }
             throw std::runtime_error(
                 filename +
                 ": Invalid composite arguments: found unexpected tokens: " +
-                arg_string);
+                join_tokens(*tokens));
         }
 
         return result;
@@ -793,16 +735,11 @@ namespace rsvp
 
         if (tokens->size() < 8 || tokens->front() != "transform")
         {
-            std::string arg_string;
-            for (auto &t : *tokens)
-            {
-                arg_string += t;
-            }
             throw std::runtime_error(
                 filename +
                 ": Invalid transdata arguments: expected arguments of the "
                 "form `transform block t1 t2 t3 t4 t5 t6` but got: " +
-                arg_string);
+                join_tokens(*tokens));
         }
 
         // Pop off "transform"

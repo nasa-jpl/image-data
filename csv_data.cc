@@ -2,9 +2,8 @@
 
 #include <stdexcept>
 
+#include <cstdlib>
 #include <fstream>
-#include <iostream>
-#include <sstream>
 
 
 namespace rsvp
@@ -31,18 +30,24 @@ namespace rsvp
         std::string str_line;
         while (std::getline(csv_file, str_line))
         {
-            std::istringstream s(str_line);
-            std::vector<double> c;
-            std::string str_field;
-            while (std::getline(s, str_field, ','))
+            std::vector<double> row;
+
+            // A field is whatever lies between commas. A field that is not a
+            // number reads as 0, and a trailing comma does not add a field.
+            for (size_t start = 0; start < str_line.size();)
             {
-                std::stringstream ss;
-                ss << str_field;
-                double value = 0;
-                ss >> value;
-                c.push_back(value);
+                row.push_back(std::strtod(str_line.c_str() + start, nullptr));
+
+                const size_t comma = str_line.find(',', start);
+                if (comma == std::string::npos)
+                {
+                    break;
+                }
+
+                start = comma + 1;
             }
-            result->data_array.push_back(c);
+
+            result->data_array.push_back(std::move(row));
         }
 
         if (result->data_array.empty() or result->data_array.at(0).empty())
@@ -50,15 +55,7 @@ namespace rsvp
             throw std::runtime_error("CSV file " + filename + " is empty");
         }
 
-        const size_t xi_size = result->data_array.size();
         const size_t yi_size = result->data_array.at(0).size();
-
-        if (xi_size < 1 or yi_size < 1)
-        {
-            throw std::runtime_error("CSV file too small it seems to be " +
-                                     std::to_string(xi_size) + " by " +
-                                     std::to_string(yi_size));
-        }
 
         for (std::vector<std::vector<double>>::const_iterator iter =
                  result->data_array.begin();

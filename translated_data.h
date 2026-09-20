@@ -31,14 +31,24 @@ namespace rsvp
         //     [ X ]   [ txx tyx t_x ]   [ sample ]
         //     [ Y ] = [ txy tyy t_y ] * [  line  ]
         //     [ 1 ]   [  0   0   1  ]   [   1    ]
-        double t_x, t_y, txx, tyx, txy, tyy;
+        double t_x = 0.0;
+        double t_y = 0.0;
+        double txx = 0.0;
+        double tyx = 0.0;
+        double txy = 0.0;
+        double tyy = 0.0;
 
 
         // Affine transformation matrix:
         //     [ sample ]   [ ixx iyx i_x ]   [ X ]
         //     [  line  ] = [ ixy iyy i_y ] * [ Y ]
         //     [   1    ]   [  0   0   1  ]   [ 1 ]
-        double i_x, i_y, ixx, iyx, ixy, iyy;
+        double i_x = 0.0;
+        double i_y = 0.0;
+        double ixx = 0.0;
+        double iyx = 0.0;
+        double ixy = 0.0;
+        double iyy = 0.0;
 
         const std::shared_ptr<ImageData> transformed_image;
 
@@ -184,6 +194,13 @@ namespace rsvp
         }
 
         TerrainBounds get_bounds() const override;
+
+        /**
+         * @brief True when this transform is what places the pixels: either
+         * the stored image has a grid of its own, or it already locates its
+         * pixels and we transform where it says they are.
+         */
+        bool bounds_locate_pixels() const override;
     };
 }
 

@@ -23,6 +23,18 @@ namespace rsvp
         std::vector<double> offsets;
         std::vector<double> scales;
 
+        /**
+         * @brief Whether `band` has an offset and scale.
+         *
+         * Checked against the tables rather than the stored image's band
+         * count, which would cost a walk down the wrappers on every pixel.
+         * The tables are sized to that count when this is constructed.
+         */
+        bool has_band(int band) const
+        {
+            return band >= 0 && static_cast<size_t>(band) < scales.size();
+        }
+
     public:
         /**
          * @brief Construct a ZOffsetData with identity offset and scaling.
@@ -56,6 +68,27 @@ namespace rsvp
          * @return The alpha image band
          */
         int get_alpha_band() const override;
+
+        /**
+         * @brief Enable or disable interpolation for the image data.
+         *
+         * For ZOffsetData, this field is set locally but is also passed
+         * through to the stored image, which is the one that interpolates.
+         *
+         * @param[in] enable Whether to enable or disable interpolation
+         */
+        void set_interpolating(bool enable) override;
+
+        /**
+         * @brief Get whether or not interpolation is enabled for the image
+         * data.
+         *
+         * For ZOffsetData, the interpolation state of the stored image is
+         * returned if available.
+         *
+         * @return True if interpolation is enabled, false otherwise.
+         */
+        int get_interpolating() const override;
 
         // Return an exact pixel value as a double
         bool
@@ -114,6 +147,20 @@ namespace rsvp
         int get_width() const override
         {
             return img ? img->get_width() : 0;
+        }
+
+        /**
+         * @brief Where the stored image sits. Offsetting and scaling values
+         * does not move pixels, so the answer is the stored image's own.
+         */
+        TerrainBounds get_bounds() const override
+        {
+            return img ? img->get_bounds() : TerrainBounds();
+        }
+
+        bool bounds_locate_pixels() const override
+        {
+            return img ? img->bounds_locate_pixels() : false;
         }
     };
 }

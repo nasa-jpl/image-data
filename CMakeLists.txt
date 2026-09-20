@@ -4,6 +4,15 @@ project(image_data_proj)
 
 option(IMAGE_DATA_BUILD_TESTING "Whether to build image_data tests" ON)
 
+# Build optimized by default when built on its own; a parent project that adds
+# this as a subdirectory chooses for itself.
+if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR
+   AND NOT CMAKE_BUILD_TYPE
+   AND NOT CMAKE_CONFIGURATION_TYPES)
+    message(STATUS "No build type given, defaulting to Release")
+    set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type" FORCE)
+endif()
+
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 

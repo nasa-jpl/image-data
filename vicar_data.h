@@ -217,8 +217,6 @@ namespace rsvp
         };
 
     private:
-        std::string filepath;
-
         // Image comments
         std::string comments;
 
@@ -228,9 +226,9 @@ namespace rsvp
                            std::unordered_map<std::string, std::string>>
             label_values;
 
-        int NL; // Number of lines
-        int NS; // Number of samples
-        int NB; // Number of bands
+        int NL = 0; // Number of lines
+        int NS = 0; // Number of samples
+        int NB = 0; // Number of bands
 
         /**
          *                 N1 -->
@@ -245,17 +243,15 @@ namespace rsvp
          *      v   |                  |
          *          +------------------+
          */
-        int N1 {}; // Size of first (fastest-varying) dimension.
-        int N2 {}; // Size of second dimension.
-        int N3 {}; // Size of third (slowest-varying) dimension.
+        int N1 = 0; // Size of first (fastest-varying) dimension.
+        int N2 = 0; // Size of second dimension.
+        int N3 = 0; // Size of third (slowest-varying) dimension.
 
-        int pds_bytes; // Number of bytes of PDS header at the tippy-top of the
-                       // file
-        int lblsize; // Number of bytes of vicar header between the PDS header
-                     // and the image
+        int lblsize = 0; // Number of bytes of vicar header between the PDS
+                         // header and the image
 
-        int NBB; // Number of bytes of binary prefix before each record
-        int NLB; // Number of lines of binary header at the top of the file
+        int NBB = 0; // Number of bytes of binary prefix before each record
+        int NLB = 0; // Number of lines of binary header at the top of the file
 
         std::unique_ptr<double[]>
             pixel_data; // Pixel data that has been re-shuffled and
@@ -265,12 +261,13 @@ namespace rsvp
                         // accessed separately therefore keeping large
                         // portions of this buffer in cache memory.
 
-        int recsize {}; // Size of a single record
+        int recsize = 0; // Size of a single record
 
-        bool int_opposite_endian;  // True if the integer data is stored in a
-                                   // non-native endianness
-        bool real_opposite_endian; // True if the floating-point data is stored
-                                   // in a non-native endianness
+        bool int_opposite_endian = false; // True if the integer data is
+                                          // stored in a non-native endianness
+        bool real_opposite_endian = false; // True if the floating-point data
+                                           // is stored in a non-native
+                                           // endianness
 
         DataFormat format = BYTE;
         DataOrg org = BSQ;
@@ -278,6 +275,15 @@ namespace rsvp
         IntFormat intfmt = LOW;
         RealFormat realfmt = IEEE;
 
+        /**
+         * @brief The offset of a pixel within `pixel_data`, which is always
+         * organized as BSQ (no interlacing).
+         */
+        size_t pixel_index(int sample, int line, int band) const
+        {
+            return static_cast<size_t>(band) * NL * NS +
+                static_cast<size_t>(line) * NS + static_cast<size_t>(sample);
+        }
 
     protected:
         /**
@@ -347,10 +353,48 @@ namespace rsvp
                 return false;
             }
 
-            // pixel_data is always organized as BSQ
-            // (no interlacing)
-            value = pixel_data[static_cast<size_t>(band * (NL * NS) + line * NS +
-                                                   sample)];
+            value = pixel_data[pixel_index(sample, line, band)];
+            return true;
+        }
+
+        /**
+         * @brief Bilinearly interpolate straight out of the pixel buffer.
+         *
+         * The default implementation fetches each of the four corners through
+         * a virtual call that checks its bounds on its own. This is the image
+         * at the bottom of every terrain stack, so check the four corners at
+         * once and read them directly. The arithmetic is the same as the
+         * default's, in the same order, so the result is identical.
+         */
+        bool get_interpolated_pixel_double(double &value,
+                                           double x,
+                                           double y,
+                                           int band) const override
+        {
+            if (!get_interpolating())
+            {
+                return get_pixel_double(
+                    value, round_to_int(x), round_to_int(y), band);
+            }
+
+            const BilinearCorners corners = bilinear_corners(x, y);
+
+            // The far corners are never nearer the origin than the near ones,
+            // so these four tests cover all four corners
+            if (corners.x0 < 0 || corners.y0 < 0 || corners.x1 >= NS ||
+                corners.y1 >= NL || band < 0 || band >= NB)
+            {
+                return false;
+            }
+
+            const double *plane = pixel_data.get() + pixel_index(0, 0, band);
+            const double *upper = plane + static_cast<size_t>(corners.y0) * NS;
+            const double *lower = plane + static_cast<size_t>(corners.y1) * NS;
+
+            value = upper[corners.x0] * corners.weight_ul +
+                upper[corners.x1] * corners.weight_ur +
+                lower[corners.x0] * corners.weight_ll +
+                lower[corners.x1] * corners.weight_lr;
             return true;
         }
 

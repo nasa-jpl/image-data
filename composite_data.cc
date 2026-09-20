@@ -5,7 +5,6 @@
 #include <algorithm>
 #include <cstddef>
 #include <limits>
-#include <list>
 #include <memory>
 #include <mutex>
 
@@ -165,46 +164,14 @@ namespace rsvp
         // Resolved once, so that the seam fallback below answers from the same
         // placement of the children that this loop blended
         const GeometrySnapshot &snapshot = geometry();
-        const std::vector<ChildGeometry> &children = snapshot.children;
 
-        for (int i = 0; i < get_count(); i++)
+        for (size_t i = 0; i < images.size(); i++)
         {
             double height = 0.0;
             double alpha = 0.0;
 
-            if (children.at(i).bands == 1)
+            if (!sample_child(snapshot, i, x, y, b, height, alpha))
             {
-                // Usually we composite `VicarData` images, which have three
-                // bands (raw, interpolated, alpha), but we also want to
-                // support using `PGMData` images (one raw band). Switch the
-                // user-requested band for band 0.
-                if (!images.at(i)->get_interpolated_pixel_double(
-                        height, x, y, 0))
-                {
-                    continue;
-                }
-
-                // PGMs have no alpha channel, so fake that they are all
-                // opaque.
-                alpha = 255.0;
-            }
-            else if (!images.at(i)->get_interpolated_pixel_double(
-                         height, x, y, b))
-            {
-                // Coordinates are out of bounds of image data, so skip this
-                // image
-                continue;
-            }
-            else if (const int band_with_alpha = children.at(i).alpha_band;
-                     band_with_alpha < 0)
-            {
-                // Nothing to say how opaque it is, so just call it opaque.
-                alpha = 255.0;
-            }
-            else if (!images.at(i)->get_interpolated_pixel_double(
-                         alpha, x, y, band_with_alpha))
-            {
-                // Valid data value, but no alpha value at this pixel
                 continue;
             }
 
@@ -271,60 +238,16 @@ namespace rsvp
         // Resolved once, so that the seam fallback below answers from the same
         // placement of the children that this loop blended
         const GeometrySnapshot &snapshot = geometry();
-        const std::vector<ChildGeometry> &children = snapshot.children;
 
-        for (int i = 0; i < get_count(); i++)
+        for (size_t i = 0; i < images.size(); i++)
         {
             double current_height = 0.0;
             double current_alpha = 0.0;
 
-            if (children.at(i).bands == 1)
+            if (!sample_child(
+                    snapshot, i, x, y, b, current_height, current_alpha))
             {
-                // Usually we composite `VicarData` images, which have three
-                // bands (raw, interpolated, alpha), but we also want to
-                // support using `PGMData` images (one raw band). Switch the
-                // user-requested band for band 0.
-                if (!images.at(i)->get_interpolated_pixel_double(
-                        current_height, x, y, 0))
-                {
-                    continue;
-                }
-
-                // PGMs have no alpha channel, so fake that they are all
-                // opaque.
-                current_alpha = 255.0;
-            }
-            else
-            {
-                // Otherwise, we're not doing the `PGMData` hackery, and should
-                // do the expected thing.
-
-                // Check the image bounds
-                if (!images.at(i)->get_interpolated_pixel_double(
-                        current_height, x, y, b))
-                {
-                    // Coordinates are out of bounds of image data, so skip
-                    // this image
-                    continue;
-                }
-
-                // Get the alpha value
-                const int band_with_alpha = children.at(i).alpha_band;
-
-                if (band_with_alpha < 0)
-                {
-                    // Nothing to say how opaque it is, so just call it opaque.
-                    current_alpha = 255.0;
-                }
-                else if (!images.at(i)->get_interpolated_pixel_double(
-                             current_alpha, x, y, band_with_alpha))
-                {
-                    // Valid data value, but no alpha value at this pixel
-                    // This should not be able to happen
-                    throw std::runtime_error(
-                        "Image pixel at (" + std::to_string(x) + ", " +
-                        std::to_string(y) + ") missing alpha band channel");
-                }
+                continue;
             }
 
             // Remap the alpha value from the 1-255 range from the image into a
@@ -402,15 +325,27 @@ namespace rsvp
         double max_score = std::numeric_limits<double>::min();
         bool covered = false;
 
-        for (int i = 0; i < get_count(); i++)
+        const GeometrySnapshot &snapshot = geometry();
+        const std::vector<ChildGeometry> &children = snapshot.children;
+
+        for (size_t i = 0; i < images.size(); i++)
         {
+            const ChildGeometry &info = children[i];
+
+            if (info.cullable && !child_may_reach(info, x, y))
+            {
+                // Certainly nowhere near (x, y)
+                continue;
+            }
+
+            const ImageData &image = *images[i];
+
             double current_score = 0.0;
             double current_value = 0.0;
 
-            if (!images.at(i)->get_interpolated_pixel_double(
-                    current_score, x, y, images.at(i)->get_alpha_band()) ||
-                !images.at(i)->get_interpolated_pixel_double(
-                    current_value, x, y, b))
+            if (!image.get_interpolated_pixel_double(
+                    current_score, x, y, info.declared_alpha_band) ||
+                !image.get_interpolated_pixel_double(current_value, x, y, b))
             {
                 // If this image doesn't have a value or an alpha value at this
                 // point, skip it
@@ -433,8 +368,6 @@ namespace rsvp
 
         // No image covers (x, y). It may still land in the band between
         // abutting images, which none of them can interpolate on its own.
-        const GeometrySnapshot &snapshot = geometry();
-
         if (!could_be_on_seam(snapshot, x, y))
         {
             return false;
@@ -448,9 +381,7 @@ namespace rsvp
         double summed_weight = 0.0;
         double nearest_value = 0.0;
 
-        const std::vector<ChildGeometry> &children = snapshot.children;
-
-        for (int i = 0; i < get_count(); i++)
+        for (size_t i = 0; i < images.size(); i++)
         {
             const auto &image = images.at(i);
 
@@ -541,6 +472,8 @@ namespace rsvp
 
             if (one.bands != other.bands ||
                 one.alpha_band != other.alpha_band ||
+                one.declared_alpha_band != other.declared_alpha_band ||
+                one.cullable != other.cullable ||
                 one.clamp_reach != other.clamp_reach ||
                 !same_bounds(one.bounds, other.bounds))
             {
@@ -590,7 +523,10 @@ namespace rsvp
             info.bounds = image->get_bounds();
             info.clamp_reach = get_clamp_reach_of(*image, info.bounds);
             info.bands = image->get_bands();
+            info.declared_alpha_band = image->get_alpha_band();
             info.alpha_band = get_alpha_band_of(*image);
+            info.cullable =
+                info.bounds.valid && image->bounds_locate_pixels();
 
             snapshot->bounds.merge(info.bounds);
         }
@@ -634,6 +570,90 @@ namespace rsvp
     TerrainBounds CompositeData::get_bounds() const
     {
         return geometry().bounds;
+    }
+
+    bool CompositeData::bounds_locate_pixels() const
+    {
+        const std::vector<ChildGeometry> &children = geometry().children;
+
+        if (children.empty())
+        {
+            return false;
+        }
+
+        for (const ChildGeometry &info : children)
+        {
+            if (!info.cullable)
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    bool CompositeData::sample_child(const GeometrySnapshot &snapshot,
+                                     const size_t index,
+                                     const double x,
+                                     const double y,
+                                     const int band,
+                                     double &value,
+                                     double &alpha) const
+    {
+        const ChildGeometry &info = snapshot.children[index];
+
+        // Most children of a mosaic are nowhere near any given point, and
+        // finding that out by sampling one costs a walk down its wrappers,
+        // an inverse transform and a bounds check. Rule it out by its bounds
+        // first where that is safe.
+        //
+        // The reach allowed is one child pixel, which covers the half-pixel
+        // an uninterpolated lookup rounds across for any similarity
+        // transform, and is more than an interpolated lookup ever needs. An
+        // affine that is far from a similarity - one that stretches one grid
+        // axis much more than the other - could in principle round further
+        // than that under `deinterpolate`; no mosaic here has such a
+        // transform.
+        if (info.cullable && !child_may_reach(info, x, y))
+        {
+            return false;
+        }
+
+        const ImageData &image = *images[index];
+
+        if (info.bands == 1)
+        {
+            // Usually we composite `VicarData` images, which have three
+            // bands (raw, interpolated, alpha), but we also want to
+            // support using `PGMData` images (one raw band). Switch the
+            // user-requested band for band 0.
+            if (!image.get_interpolated_pixel_double(value, x, y, 0))
+            {
+                return false;
+            }
+
+            // PGMs have no alpha channel, so fake that they are all opaque.
+            alpha = 255.0;
+            return true;
+        }
+
+        if (!image.get_interpolated_pixel_double(value, x, y, band))
+        {
+            // Coordinates are out of bounds of image data
+            return false;
+        }
+
+        if (info.alpha_band < 0)
+        {
+            // Nothing to say how opaque it is, so just call it opaque.
+            alpha = 255.0;
+            return true;
+        }
+
+        // A valid data value but no alpha value at this pixel means the
+        // alpha band was declared out of range; treat that as no data.
+        return image.get_interpolated_pixel_double(
+            alpha, x, y, info.alpha_band);
     }
 
     bool CompositeData::could_be_on_seam(const GeometrySnapshot &snapshot,

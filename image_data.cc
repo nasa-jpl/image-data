@@ -9,7 +9,9 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cctype>
 #include <cmath>
+#include <cstdio>
 
 namespace rsvp
 {
@@ -24,6 +26,26 @@ namespace rsvp
             static std::atomic<unsigned long> counter(1);
             return counter;
         }
+    }
+
+    std::string get_file_extension(const std::string &path)
+    {
+        const size_t dot = path.find_last_of('.');
+        const size_t slash = path.find_last_of('/');
+        if (dot == std::string::npos ||
+            (slash != std::string::npos && dot < slash))
+        {
+            // No extension, or a dot in a directory name rather than the file
+            // name
+            return std::string();
+        }
+
+        std::string extension = path.substr(dot + 1);
+        std::transform(extension.begin(),
+                       extension.end(),
+                       extension.begin(),
+                       [](unsigned char c) { return std::tolower(c); });
+        return extension;
     }
 
     unsigned long geometry_version()
@@ -47,28 +69,24 @@ namespace rsvp
     std::shared_ptr<ImageData> ImageData::read(const std::string &filename)
     {
         std::shared_ptr<ImageData> return_value;
-        std::string extension =
-            filename.substr(filename.find_last_of('.') + 1);
-        if (extension == "mod" || extension == "MOD" ||
-            extension == "mod_tc" || extension == "MOD_TC")
+        const std::string extension = get_file_extension(filename);
+        if (extension == "mod" || extension == "mod_tc")
         {
             return_value = ModData::read_modfile(filename);
         }
-        else if (extension == "img" || extension == "IMG" ||
-                 extension == "vic" || extension == "VIC")
+        else if (extension == "img" || extension == "vic")
         {
             return_value = VicarData::read_vicarfile(filename);
         }
-        else if (extension == "ht" || extension == "HT" || extension == "tc" ||
-                 extension == "TC")
+        else if (extension == "ht" || extension == "tc")
         {
             return_value = ModData::read_bare_vicarfile(filename);
         }
-        else if (extension == "csv" || extension == "CSV")
+        else if (extension == "csv")
         {
             return_value = CSVData::read_csv(filename);
         }
-        else if (extension == "pgm" || extension == "PGM")
+        else if (extension == "pgm")
         {
             return_value = PGMData::read_pgm(filename);
         }
@@ -95,87 +113,43 @@ namespace rsvp
         // whole pixel and return that data
         if (!get_interpolating())
         {
-            int x_uninterp =
-                x > 0 ? static_cast<int>(x + 0.5) : static_cast<int>(x - 0.5);
-            int y_uninterp =
-                y > 0 ? static_cast<int>(y + 0.5) : static_cast<int>(y - 0.5);
-            return get_pixel_double(value, x_uninterp, y_uninterp, band);
+            return get_pixel_double(
+                value, round_to_int(x), round_to_int(y), band);
         }
 
-        // We sample at (int_x, int_y) and (int_x+1, int_y+1), so those two
-        // must span the input, which means rounding down rather than toward
-        // zero. Getting that wrong for coordinates in (-1, 0) - leaving the
-        // corner at 0 - is what used to mirror the interpolation about the
-        // image edge instead of reporting the coordinate out of bounds.
-        //
-        // Done by hand rather than with std::floor: this is the terrain
-        // settling hot path, and on 32-bit x86 without SSE4.1 there is no
-        // instruction to inline std::floor to, so it compiles to a libm call.
-        int int_x = static_cast<int>(x);
-        int int_y = static_cast<int>(y);
-
-        if (x < int_x)
-        {
-            int_x--;
-        }
-
-        if (y < int_y)
-        {
-            int_y--;
-        }
-
-        const double frac_x = x - int_x;
-        const double frac_y = y - int_y;
-
-        // When a fraction is zero the far corner has zero weight, so it must
-        // not be required to exist - otherwise a coordinate landing exactly on
-        // the last row or column of an image would fail for want of a neighbor
-        // it does not need. Fold that in by collapsing the far corner onto the
-        // near one, which keeps the four fetches below unconditional.
-        //
-        // Two cheaper-looking alternatives measure worse, so leave this alone:
-        // branching on the fractions costs a pair of unpredictable branches
-        // per call (and comparing a double against zero costs two branches,
-        // not one), and letting a weightless fetch fail instead stops the
-        // compiler short-circuiting the weight test.
-        const int far_x = (frac_x > 0.0) ? int_x + 1 : int_x;
-        const int far_y = (frac_y > 0.0) ? int_y + 1 : int_y;
+        const BilinearCorners corners = bilinear_corners(x, y);
 
         // Upper left (x, y)
         double ul = 0.0;
-        if (!get_pixel_double(ul, int_x, int_y, band))
+        if (!get_pixel_double(ul, corners.x0, corners.y0, band))
         {
             return false;
         }
-        const double ul_weight = (1.0 - frac_x) * (1.0 - frac_y);
 
         // Upper right (x+1, y)
         double ur = 0.0;
-        if (!get_pixel_double(ur, far_x, int_y, band))
+        if (!get_pixel_double(ur, corners.x1, corners.y0, band))
         {
             return false;
         }
-        const double ur_weight = frac_x * (1.0 - frac_y);
 
         // Lower left (x, y+1)
         double ll = 0.0;
-        if (!get_pixel_double(ll, int_x, far_y, band))
+        if (!get_pixel_double(ll, corners.x0, corners.y1, band))
         {
             return false;
         }
-        const double ll_weight = (1.0 - frac_x) * frac_y;
 
         // Lower right (x+1, y+1)
         double lr = 0.0;
-        if (!get_pixel_double(lr, far_x, far_y, band))
+        if (!get_pixel_double(lr, corners.x1, corners.y1, band))
         {
             return false;
         }
-        const double lr_weight = frac_x * frac_y;
 
         // Perform bilinear interpolation
-        value =
-            ul * ul_weight + ur * ur_weight + ll * ll_weight + lr * lr_weight;
+        value = ul * corners.weight_ul + ur * corners.weight_ur +
+            ll * corners.weight_ll + lr * corners.weight_lr;
         return true;
     }
 
@@ -228,20 +202,9 @@ namespace rsvp
         {
             return false;
         }
-        else
-        {
-            if (result > 0.0)
-            {
-                result += 0.5;
-            }
-            else if (result < 0.0)
-            {
-                result -= 0.5;
-            }
 
-            value = static_cast<int>(result);
-            return true;
-        }
+        value = round_to_int(result);
+        return true;
     }
 
     // Provide a default implementation to get the value as a double and round
@@ -256,20 +219,9 @@ namespace rsvp
         {
             return false;
         }
-        else
-        {
-            if (result > 0.0)
-            {
-                result += 0.5;
-            }
-            else if (result < 0.0)
-            {
-                result -= 0.5;
-            }
 
-            value = static_cast<int>(result);
-            return true;
-        }
+        value = round_to_int(result);
+        return true;
     }
 
     void ImageData::set_interpolating(bool enable)
@@ -327,20 +279,21 @@ namespace rsvp
 
             // Bayer format is RGGB with each field being 8 bits
             // Green takes up 2 fields
-            for (int x = 0; x < width; x++)
+            for (int y = 0; y < height; y++)
             {
-                for (int y = 0; y < height; y++)
+                for (int x = 0; x < width; x++)
                 {
-                    data[y * width + x].red = 0;
-                    data[y * width + x].green = 0;
-                    data[y * width + x].blue = 0;
+                    pixel_t &pixel = data[y * width + x];
+                    pixel.red = 0;
+                    pixel.green = 0;
+                    pixel.blue = 0;
 
                     // RED
                     if (number_of_bands >= 1)
                     {
                         int red_raw;
                         get_pixel_int(red_raw, x, y, 0);
-                        data[y * width + x].red = red_raw & 0xff;
+                        pixel.red = red_raw & 0xff;
                     }
 
                     // GREEN_GREEN
@@ -348,7 +301,7 @@ namespace rsvp
                     {
                         int green_raw;
                         get_pixel_int(green_raw, x, y, 1);
-                        data[y * width + x].green = green_raw & 0xff;
+                        pixel.green = green_raw & 0xff;
                     }
 
                     // BLUE
@@ -356,7 +309,7 @@ namespace rsvp
                     {
                         int blue_raw;
                         get_pixel_int(blue_raw, x, y, 2);
-                        data[y * width + x].blue = blue_raw & 0xff;
+                        pixel.blue = blue_raw & 0xff;
                     }
                 }
             }
@@ -368,9 +321,9 @@ namespace rsvp
 
             // We will average all bands (PANCHROMATIC)
             // Single band images will simply copy their data
-            for (int x = 0; x < width; x++)
+            for (int y = 0; y < height; y++)
             {
-                for (int y = 0; y < height; y++)
+                for (int x = 0; x < width; x++)
                 {
                     int band_sum = 0;
                     for (int band = 0; band < number_of_bands; band++)
@@ -414,9 +367,9 @@ namespace rsvp
             }
 
             // We assume the only band is BLUE
-            for (int x = 0; x < width; x++)
+            for (int y = 0; y < height; y++)
             {
-                for (int y = 0; y < height; y++)
+                for (int x = 0; x < width; x++)
                 {
                     int pix_val;
                     get_pixel_int(pix_val, x, y, chosen_band);

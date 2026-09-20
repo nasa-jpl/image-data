@@ -60,6 +60,24 @@ namespace rsvp
 
             /// Which of those bands carries alpha, or -1 for none.
             int alpha_band = -1;
+
+            /**
+             * The band the child itself declares as alpha, or -1 if it
+             * declares none. `alpha_band` is what compositing resolves that
+             * to; a scored composite goes by the declaration alone.
+             */
+            int declared_alpha_band = -1;
+
+            /**
+             * Whether `bounds` may be used to skip the child.
+             *
+             * True only when the bounds are valid and the child says they
+             * are in the coordinates its lookups take. A bare `VicarData`
+             * reports where its labels say it sits in the world while its
+             * lookups are in pixel indices, and skipping it by those bounds
+             * would punch a hole in the terrain.
+             */
+            bool cullable = false;
         };
 
         /**
@@ -264,6 +282,12 @@ namespace rsvp
         TerrainBounds get_bounds() const override;
 
         /**
+         * @brief True when every child can be located by its bounds, so that
+         * the merged bounds locate every pixel this composite can answer for.
+         */
+        bool bounds_locate_pixels() const override;
+
+        /**
          * @brief Set interpolation mode for composite and all child images.
          *
          * @param enable true to enable bilinear interpolation, false for nearest-neighbor
@@ -283,6 +307,34 @@ namespace rsvp
                                       int band) const override;
 
     protected:
+        /**
+         * @brief Sample one child's data and alpha for compositing.
+         *
+         * A child that is certainly out of reach of (x, y) is skipped without
+         * being sampled. A one-band child - a PGM - is read from band 0
+         * whatever band was asked for, and called fully opaque, as is a
+         * child with no alpha band.
+         *
+         * @param[in]  snapshot Where this composite's children sit
+         * @param[in]  index    Which child to sample
+         * @param[in]  x        The "x-like" coordinate of the pixel
+         * @param[in]  y        The "y-like" coordinate of the pixel
+         * @param[in]  band     The band of the pixel to access
+         * @param[out] value    The child's data at (x, y)
+         * @param[out] alpha    The child's alpha at (x, y), on the image's
+         * 1-255 scale
+         *
+         * @return false if the child does not cover (x, y), or has no alpha
+         * there
+         */
+        bool sample_child(const GeometrySnapshot &snapshot,
+                          size_t index,
+                          double x,
+                          double y,
+                          int band,
+                          double &value,
+                          double &alpha) const;
+
         /**
          * @brief Reconstruct a value in the band between abutting images.
          *

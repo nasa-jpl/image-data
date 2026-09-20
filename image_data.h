@@ -1,13 +1,20 @@
 #ifndef RSVP_IMAGE_DATA_IMAGE_DATA_H
 #define RSVP_IMAGE_DATA_IMAGE_DATA_H
 
-#include <list>
+#include <cstdint>
 #include <memory>
 #include <string>
 #include <vector>
 
 namespace rsvp
 {
+
+    /**
+     * @brief The extension of a path, lower-cased and without the dot.
+     *
+     * @return The empty string if the path has no extension.
+     */
+    std::string get_file_extension(const std::string &path);
 
     /**
      * @brief A counter that changes whenever the placement of any image
@@ -138,6 +145,98 @@ namespace rsvp
 
     protected:
         ImageData();
+
+        /**
+         * @brief The four pixels a bilinear sample at (x, y) draws on, and
+         * the weight each is owed.
+         *
+         * The corners are (x0, y0), (x1, y0), (x0, y1) and (x1, y1), with the
+         * weights in that order. A corner whose weight is zero is collapsed
+         * onto its neighbour, so the four are always inside the image
+         * whenever (x, y) is.
+         */
+        struct BilinearCorners
+        {
+            int x0;
+            int y0;
+            int x1;
+            int y1;
+            double weight_ul;
+            double weight_ur;
+            double weight_ll;
+            double weight_lr;
+        };
+
+        /**
+         * @brief Work out the corners and weights of a bilinear sample.
+         *
+         * Shared by the default `get_interpolated_pixel_double` and by images
+         * that can read the corners straight out of memory.
+         */
+        static BilinearCorners bilinear_corners(double x, double y)
+        {
+            // We sample at (x0, y0) and (x0 + 1, y0 + 1), so those two must
+            // span the input, which means rounding down rather than toward
+            // zero. Getting that wrong for coordinates in (-1, 0) - leaving
+            // the corner at 0 - is what used to mirror the interpolation
+            // about the image edge instead of reporting the coordinate out of
+            // bounds.
+            //
+            // Done by hand rather than with std::floor: this is the terrain
+            // settling hot path, and on 32-bit x86 without SSE4.1 there is no
+            // instruction to inline std::floor to, so it compiles to a libm
+            // call.
+            int x0 = static_cast<int>(x);
+            int y0 = static_cast<int>(y);
+
+            if (x < x0)
+            {
+                x0--;
+            }
+
+            if (y < y0)
+            {
+                y0--;
+            }
+
+            const double frac_x = x - x0;
+            const double frac_y = y - y0;
+
+            // When a fraction is zero the far corner has zero weight, so it
+            // must not be required to exist - otherwise a coordinate landing
+            // exactly on the last row or column of an image would fail for
+            // want of a neighbor it does not need. Fold that in by collapsing
+            // the far corner onto the near one, which keeps the four fetches
+            // unconditional.
+            //
+            // Two cheaper-looking alternatives measure worse, so leave this
+            // alone: branching on the fractions costs a pair of unpredictable
+            // branches per call (and comparing a double against zero costs
+            // two branches, not one), and letting a weightless fetch fail
+            // instead stops the compiler short-circuiting the weight test.
+            BilinearCorners corners;
+            corners.x0 = x0;
+            corners.y0 = y0;
+            corners.x1 = (frac_x > 0.0) ? x0 + 1 : x0;
+            corners.y1 = (frac_y > 0.0) ? y0 + 1 : y0;
+            corners.weight_ul = (1.0 - frac_x) * (1.0 - frac_y);
+            corners.weight_ur = frac_x * (1.0 - frac_y);
+            corners.weight_ll = (1.0 - frac_x) * frac_y;
+            corners.weight_lr = frac_x * frac_y;
+            return corners;
+        }
+
+        /**
+         * @brief Round to the nearest integer, halves away from zero.
+         *
+         * Used both to snap a coordinate to a whole pixel for uninterpolated
+         * lookups and to round a value for the integer accessors.
+         */
+        static int round_to_int(double value)
+        {
+            return value > 0.0 ? static_cast<int>(value + 0.5) :
+                                 static_cast<int>(value - 0.5);
+        }
 
     public:
         /**
@@ -329,6 +428,25 @@ namespace rsvp
         {
             // Default implementation returns invalid bounds
             return TerrainBounds();
+        }
+
+        /**
+         * @brief Whether `get_bounds` is expressed in the same coordinates
+         * that the pixel lookups take.
+         *
+         * A `TranslatedData` places a pixel grid with its transform, so the
+         * bounds it reports are exactly where its lookups find pixels. A bare
+         * `VicarData`, by contrast, reports where its labels say it sits in
+         * the world while its lookups are in pixel indices. A composite may
+         * only skip a child by its bounds when the two agree, so this is the
+         * question it asks first.
+         *
+         * @return false unless overridden: an image that has not said
+         * otherwise is never skipped by its bounds.
+         */
+        virtual bool bounds_locate_pixels() const
+        {
+            return false;
         }
 
         /**

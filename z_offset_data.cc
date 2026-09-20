@@ -1,5 +1,4 @@
 #include "z_offset_data.h"
-#include <list>
 
 
 namespace rsvp
@@ -9,11 +8,9 @@ namespace rsvp
     {
         if (inImg != nullptr)
         {
-            for (int i = 0; i < img->get_bands(); i++)
-            {
-                scales.push_back(1.0);
-                offsets.push_back(0.0);
-            }
+            const size_t bands = static_cast<size_t>(img->get_bands());
+            scales.assign(bands, 1.0);
+            offsets.assign(bands, 0.0);
         }
     }
 
@@ -22,10 +19,10 @@ namespace rsvp
     void
     ZOffsetData::set_offset_and_scale(int band, double _offset, double _scale)
     {
-        if (band >= 0 && band < get_bands())
+        if (has_band(band))
         {
-            offsets.at(band) = _offset;
-            scales.at(band) = _scale;
+            offsets[band] = _offset;
+            scales[band] = _scale;
         }
     }
 
@@ -34,18 +31,13 @@ namespace rsvp
                                        const int y,
                                        const int band) const
     {
-        if (band < 0 || band >= get_bands())
-        {
-            return false;
-        }
-
         double raw_result = 0.0;
-        if (!img->get_pixel_double(raw_result, x, y, band))
+        if (!has_band(band) || !img->get_pixel_double(raw_result, x, y, band))
         {
             return false;
         }
 
-        value = (raw_result * scales.at(band)) + offsets.at(band);
+        value = (raw_result * scales[band]) + offsets[band];
         return true;
     }
 
@@ -54,18 +46,14 @@ namespace rsvp
                                                     const double y,
                                                     const int band) const
     {
-        if (band < 0 || band >= get_bands())
-        {
-            return false;
-        }
-
         double raw_result = 0.0;
-        if (!img->get_interpolated_pixel_double(raw_result, x, y, band))
+        if (!has_band(band) ||
+            !img->get_interpolated_pixel_double(raw_result, x, y, band))
         {
             return false;
         }
 
-        value = (raw_result * scales.at(band)) + offsets.at(band);
+        value = (raw_result * scales[band]) + offsets[band];
         return true;
     }
 
@@ -75,18 +63,14 @@ namespace rsvp
                                                const double y,
                                                const int band) const
     {
-        if (img == nullptr || band < 0 || band >= get_bands())
-        {
-            return false;
-        }
-
         double raw_result = 0.0;
-        if (!img->get_clamped_pixel_double(raw_result, weight, x, y, band))
+        if (!has_band(band) ||
+            !img->get_clamped_pixel_double(raw_result, weight, x, y, band))
         {
             return false;
         }
 
-        value = (raw_result * scales.at(band)) + offsets.at(band);
+        value = (raw_result * scales[band]) + offsets[band];
         return true;
     }
 
@@ -95,29 +79,13 @@ namespace rsvp
                                     const int y,
                                     const int band) const
     {
-        if (band < 0 || band >= get_bands())
-        {
-            return false;
-        }
-
         int raw_result = 0;
-        if (!img->get_pixel_int(raw_result, x, y, band))
+        if (!has_band(band) || !img->get_pixel_int(raw_result, x, y, band))
         {
             return false;
         }
 
-        double scaled_value =
-            (raw_result * scales.at(band)) + offsets.at(band);
-
-        if (scaled_value > 0)
-        {
-            value = static_cast<int>(scaled_value + 0.5);
-        }
-        else
-        {
-            value = static_cast<int>(scaled_value - 0.5);
-        }
-
+        value = round_to_int((raw_result * scales[band]) + offsets[band]);
         return true;
     }
 
@@ -126,29 +94,14 @@ namespace rsvp
                                                  const double y,
                                                  const int band) const
     {
-        if (band < 0 || band >= get_bands())
-        {
-            return false;
-        }
-
         int raw_result = 0;
-        if (!img->get_interpolated_pixel_int(raw_result, x, y, band))
+        if (!has_band(band) ||
+            !img->get_interpolated_pixel_int(raw_result, x, y, band))
         {
             return false;
         }
 
-        double scaled_value =
-            (raw_result * scales.at(band)) + offsets.at(band);
-
-        if (scaled_value > 0)
-        {
-            value = static_cast<int>(scaled_value + 0.5);
-        }
-        else
-        {
-            value = static_cast<int>(scaled_value - 0.5);
-        }
-
+        value = round_to_int((raw_result * scales[band]) + offsets[band]);
         return true;
     }
 
@@ -182,6 +135,27 @@ namespace rsvp
         else
         {
             return ImageData::get_alpha_band();
+        }
+    }
+
+    void ZOffsetData::set_interpolating(bool enable)
+    {
+        ImageData::set_interpolating(enable);
+        if (img != nullptr)
+        {
+            img->set_interpolating(enable);
+        }
+    }
+
+    int ZOffsetData::get_interpolating() const
+    {
+        if (img != nullptr)
+        {
+            return img->get_interpolating();
+        }
+        else
+        {
+            return ImageData::get_interpolating();
         }
     }
 }

@@ -3,6 +3,7 @@
 
 #include "image_data.h"
 
+#include <list>
 
 namespace rsvp
 {

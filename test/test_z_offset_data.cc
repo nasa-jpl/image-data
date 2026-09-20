@@ -387,3 +387,103 @@ TEST(z_offset_data, get_clamped_pixel_double_through_a_transform)
     EXPECT_FALSE(offsetData.get_clamped_pixel_double(
         value, weight, pixel_01_x - 1.25 * scale, pixel_01_y, 0));
 }
+namespace
+{
+    // A 3x3 image whose values are 1 + x + 3y, which bilinear interpolation
+    // reproduces exactly, and which interpolates through the default path
+    class PlainTestImage final : public rsvp::ImageData
+    {
+    public:
+        int get_bands() const override
+        {
+            return 1;
+        }
+
+        int get_width() const override
+        {
+            return 3;
+        }
+
+        int get_height() const override
+        {
+            return 3;
+        }
+
+        bool
+        get_pixel_double(double &value, int x, int y, int band) const override
+        {
+            if (x < 0 || x >= 3 || y < 0 || y >= 3 || band != 0)
+            {
+                return false;
+            }
+
+            value = 1.0 + x + 3.0 * y;
+            return true;
+        }
+    };
+}
+
+// Offsetting values does not move pixels, so where the stored image sits is
+// where the ZOffsetData sits
+TEST(z_offset_data, bounds_are_the_stored_images)
+{
+    const auto image = std::make_shared<PlainTestImage>();
+
+    rsvp::ZOffsetData unplaced(image);
+    EXPECT_FALSE(unplaced.get_bounds().valid);
+    EXPECT_FALSE(unplaced.bounds_locate_pixels());
+
+    const auto placed =
+        std::make_shared<rsvp::TranslatedData>(image, 5.0, 6.0, 1.0, 0.0);
+    rsvp::ZOffsetData offset(placed);
+
+    const auto expected = placed->get_bounds();
+    const auto bounds = offset.get_bounds();
+    ASSERT_TRUE(expected.valid);
+    ASSERT_TRUE(bounds.valid);
+    EXPECT_DOUBLE_EQ(bounds.min_x, expected.min_x);
+    EXPECT_DOUBLE_EQ(bounds.max_x, expected.max_x);
+    EXPECT_DOUBLE_EQ(bounds.min_y, expected.min_y);
+    EXPECT_DOUBLE_EQ(bounds.max_y, expected.max_y);
+    EXPECT_TRUE(offset.bounds_locate_pixels());
+}
+
+// The stored image is the one that interpolates, so turning interpolation off
+// has to reach it - a `deinterpolate` block around a `zoffset` block used not
+// to
+TEST(z_offset_data, interpolation_passes_through)
+{
+    const auto image = std::make_shared<PlainTestImage>();
+    rsvp::ZOffsetData offset(image);
+    offset.set_offset_and_scale(0, 100.0, 1.0);
+
+    double value = 0.0;
+    EXPECT_TRUE(offset.get_interpolated_pixel_double(value, 0.4, 0.4, 0));
+    EXPECT_DOUBLE_EQ(value, 100.0 + 1.0 + 0.4 + 3.0 * 0.4);
+
+    offset.set_interpolating(false);
+    EXPECT_FALSE(image->get_interpolating());
+    EXPECT_FALSE(offset.get_interpolating());
+
+    EXPECT_TRUE(offset.get_interpolated_pixel_double(value, 0.4, 0.4, 0));
+    EXPECT_DOUBLE_EQ(value, 100.0 + 1.0);
+
+    offset.set_interpolating(true);
+    EXPECT_TRUE(image->get_interpolating());
+    EXPECT_TRUE(offset.get_interpolating());
+}
+
+// A band the tables were not sized for is out of range rather than an error
+TEST(z_offset_data, bands_beyond_the_tables_are_out_of_range)
+{
+    rsvp::ZOffsetData offset(std::make_shared<PlainTestImage>());
+
+    EXPECT_NO_THROW(offset.set_offset_and_scale(5, 1.0, 1.0));
+    EXPECT_NO_THROW(offset.set_offset_and_scale(-1, 1.0, 1.0));
+
+    double value = 0.0;
+    EXPECT_FALSE(offset.get_pixel_double(value, 0, 0, 5));
+    EXPECT_FALSE(offset.get_pixel_double(value, 0, 0, -1));
+    EXPECT_FALSE(offset.get_interpolated_pixel_double(value, 0.0, 0.0, 5));
+    EXPECT_TRUE(offset.get_pixel_double(value, 0, 0, 0));
+}
