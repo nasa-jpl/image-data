@@ -332,7 +332,7 @@ namespace rsvp
         {
             const ChildGeometry &info = children[i];
 
-            if (info.cullable && !child_may_reach(info, x, y))
+            if (!child_may_reach(info, x, y))
             {
                 // Certainly nowhere near (x, y)
                 continue;
@@ -529,6 +529,13 @@ namespace rsvp
                 info.bounds.valid && image->bounds_locate_pixels();
 
             snapshot->bounds.merge(info.bounds);
+            snapshot->all_locate_pixels &= info.cullable;
+        }
+
+        if (images.empty())
+        {
+            // Nothing locates anything
+            snapshot->all_locate_pixels = false;
         }
 
         if (published != nullptr &&
@@ -558,9 +565,12 @@ namespace rsvp
                                         const double x,
                                         const double y)
     {
-        if (!info.bounds.valid || info.clamp_reach <= 0.0)
+        if (!info.cullable || info.clamp_reach <= 0.0)
         {
-            // Nothing known about the child, so nothing ruled out
+            // Either nothing is known about where the child's pixels are, or
+            // its bounds are not where its lookups look, so nothing is ruled
+            // out. Every path that skips a child comes through here, so this
+            // is the one place that has to get that right.
             return true;
         }
 
@@ -574,22 +584,7 @@ namespace rsvp
 
     bool CompositeData::bounds_locate_pixels() const
     {
-        const std::vector<ChildGeometry> &children = geometry().children;
-
-        if (children.empty())
-        {
-            return false;
-        }
-
-        for (const ChildGeometry &info : children)
-        {
-            if (!info.cullable)
-            {
-                return false;
-            }
-        }
-
-        return true;
+        return geometry().all_locate_pixels;
     }
 
     bool CompositeData::sample_child(const GeometrySnapshot &snapshot,
@@ -614,7 +609,7 @@ namespace rsvp
         // axis much more than the other - could in principle round further
         // than that under `deinterpolate`; no mosaic here has such a
         // transform.
-        if (info.cullable && !child_may_reach(info, x, y))
+        if (!child_may_reach(info, x, y))
         {
             return false;
         }
@@ -667,11 +662,13 @@ namespace rsvp
         }
 
         // Seams run between the images, so a point beyond the outer edge of
-        // all of them is not on one. Images that do not know where they are
-        // leave the bounds invalid, and then this rules nothing out.
-        const TerrainBounds &bounds = snapshot.bounds;
-
-        return !bounds.valid || bounds.contains(x, y, bounds_margin);
+        // all of them is not on one. That only follows when the merged bounds
+        // are where every child's pixels are: a child that does not know
+        // where it is, or one whose bounds are not in the coordinates its
+        // lookups take, could have a seam anywhere, and then this rules
+        // nothing out.
+        return !snapshot.all_locate_pixels ||
+            snapshot.bounds.contains(x, y, bounds_margin);
     }
 
     int CompositeData::get_alpha_band_of(const ImageData &image)

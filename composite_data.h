@@ -104,6 +104,13 @@ namespace rsvp
             TerrainBounds bounds;
 
             /**
+             * Whether every child is `cullable`, so that `bounds` is where
+             * every pixel this composite can answer for is. False with no
+             * children.
+             */
+            bool all_locate_pixels = true;
+
+            /**
              * The `geometry_version()` this was last known to be good for.
              *
              * Not part of what the snapshot says about the children, but a
@@ -157,6 +164,9 @@ namespace rsvp
          * @param[in] info The child to test
          * @param[in] x    The "x-like" coordinate of the pixel of interest
          * @param[in] y    The "y-like" coordinate of the pixel of interest
+         *
+         * A child that is not `cullable` is never ruled out: its bounds are
+         * not where its pixels are, so they say nothing about its reach.
          *
          * @return false if the child is certainly too far from (x, y) to have
          * a say. true means only that it might.

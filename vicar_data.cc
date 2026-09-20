@@ -97,7 +97,9 @@ namespace rsvp
             return nullptr;
         }
 
-        // Encodes `count` doubles into one raw type, in the host byte order
+        // Encodes `count` doubles into one raw type, in the host byte order.
+        // The raw types mirror the decoder's: converting a negative double to
+        // an unsigned type is undefined, and does not wrap on every target.
         using Encoder =
             void (*)(const double *source, uint8_t *destination, int count);
 
@@ -121,9 +123,9 @@ namespace rsvp
             case VicarData::BYTE:
                 return &encode_run<uint8_t>;
             case VicarData::HALF:
-                return &encode_run<uint16_t>;
+                return &encode_run<int16_t>;
             case VicarData::FULL:
-                return &encode_run<uint32_t>;
+                return &encode_run<int32_t>;
             case VicarData::REAL:
                 return &encode_run<float>;
             case VicarData::DOUB:

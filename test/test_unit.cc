@@ -605,3 +605,220 @@ int main(int argc, char **argv)
 
     return RUN_ALL_TESTS();
 }
+
+// HALF and FULL are signed, and the writer must keep negative values so
+TEST(vicar_data, negative_integer_pixels_round_trip)
+{
+    const std::string tmp_dir =
+        image_data::image_data_test_mkdtemp("/tmp/tmp.XXXXXX");
+    ASSERT_TRUE(tmp_dir.length() != 0);
+
+    const struct
+    {
+        rsvp::VicarData::DataFormat format;
+        double values[2];
+    } cases[] = {
+        {rsvp::VicarData::HALF, {-5.0, 32767.0}},
+        {rsvp::VicarData::FULL, {-70000.0, 70000.0}},
+    };
+
+    for (const auto &c : cases)
+    {
+        rsvp::VicarData image(2, 1, 1, c.format);
+        image.set_pixel_double(c.values[0], 0, 0, 0);
+        image.set_pixel_double(c.values[1], 1, 0, 0);
+
+        const std::string path = tmp_dir + "/signed.vic";
+        image.write_vicarfile(path);
+
+        const auto copy = rsvp::VicarData::read_vicarfile(path);
+        ASSERT_TRUE(copy != nullptr);
+
+        for (int x = 0; x < 2; x++)
+        {
+            double value = 0.0;
+            EXPECT_TRUE(copy->get_pixel_double(value, x, 0, 0));
+            EXPECT_EQ(value, c.values[x]);
+        }
+    }
+
+    ASSERT_TRUE(image_data::image_data_test_rm_directory(tmp_dir) == 0);
+}
+
+// A quote inside a label value is escaped by doubling it, on the way in and
+// on the way back out
+TEST(vicar_data, quotes_in_labels_round_trip)
+{
+    const std::string tmp_dir =
+        image_data::image_data_test_mkdtemp("/tmp/tmp.XXXXXX");
+    ASSERT_TRUE(tmp_dir.length() != 0);
+    const std::string path = tmp_dir + "/quoted.vic";
+
+    write_synthetic_vicar(path,
+                          "FORMAT='BYTE'  TYPE='IMAGE'  BUFSIZ=1  DIM=3  "
+                          "EOL=0  RECSIZE=1  ORG='BSQ'  NL=1  NS=1  NB=1  "
+                          "N1=1  N2=1  N3=1  N4=0  NBB=0  NLB=0  "
+                          "INTFMT='LOW'  REALFMT='RIEEE'  "
+                          "PROPERTY='NOTES'  OWNER='O''Brien'",
+                          {42});
+
+    const auto image = rsvp::VicarData::read_vicarfile(path);
+    ASSERT_TRUE(image != nullptr);
+
+    std::string owner;
+    EXPECT_TRUE(image->get_label_property("NOTES", "OWNER", owner));
+    EXPECT_EQ(owner, "O'Brien");
+
+    const std::string copy_path = tmp_dir + "/quoted_copy.vic";
+    image->write_vicarfile(copy_path);
+
+    const auto copy = rsvp::VicarData::read_vicarfile(copy_path);
+    ASSERT_TRUE(copy != nullptr);
+
+    owner.clear();
+    EXPECT_TRUE(copy->get_label_property("NOTES", "OWNER", owner));
+    EXPECT_EQ(owner, "O'Brien");
+
+    double value = 0.0;
+    EXPECT_TRUE(copy->get_pixel_double(value, 0, 0, 0));
+    EXPECT_EQ(value, 42.0);
+
+    ASSERT_TRUE(image_data::image_data_test_rm_directory(tmp_dir) == 0);
+}
+
+// Interpolating straight out of the pixel buffer must agree with the default
+// implementation everywhere, edges and all
+TEST(vicar_data, interpolates_like_the_default)
+{
+    rsvp::VicarData image(3, 3, 1, rsvp::VicarData::REAL);
+    for (int y = 0; y < 3; y++)
+    {
+        for (int x = 0; x < 3; x++)
+        {
+            image.set_pixel_double(1.0 + x + 3 * y, x, y, 0);
+        }
+    }
+
+    double value = 0.0;
+
+    // Interior, last row and column, and just past them
+    EXPECT_TRUE(image.get_interpolated_pixel_double(value, 0.5, 0.5, 0));
+    EXPECT_DOUBLE_EQ(value, 3.0);
+    EXPECT_TRUE(image.get_interpolated_pixel_double(value, 2.0, 2.0, 0));
+    EXPECT_DOUBLE_EQ(value, 9.0);
+    EXPECT_TRUE(image.get_interpolated_pixel_double(value, 2.0, 0.5, 0));
+    EXPECT_DOUBLE_EQ(value, 4.5);
+    EXPECT_FALSE(image.get_interpolated_pixel_double(value, 2.25, 2.0, 0));
+    EXPECT_FALSE(image.get_interpolated_pixel_double(value, 2.0, 2.25, 0));
+
+    // Between -1 and 0 is outside, not a reflection about the edge
+    EXPECT_FALSE(image.get_interpolated_pixel_double(value, -0.25, 0.0, 0));
+    EXPECT_FALSE(image.get_interpolated_pixel_double(value, 0.0, -0.25, 0));
+
+    // Bands are checked too
+    EXPECT_FALSE(image.get_interpolated_pixel_double(value, 1.0, 1.0, 1));
+    EXPECT_FALSE(image.get_interpolated_pixel_double(value, 1.0, 1.0, -1));
+
+    // Every answer matches the one the default arrives at through
+    // get_pixel_double
+    for (int interpolating = 0; interpolating < 2; interpolating++)
+    {
+        image.set_interpolating(interpolating);
+
+        for (double y = -1.5; y <= 3.5; y += 0.125)
+        {
+            for (double x = -1.5; x <= 3.5; x += 0.125)
+            {
+                double fast = 0.0;
+                double slow = 0.0;
+                const bool fast_ok =
+                    image.get_interpolated_pixel_double(fast, x, y, 0);
+                const bool slow_ok =
+                    image.ImageData::get_interpolated_pixel_double(
+                        slow, x, y, 0);
+                ASSERT_EQ(fast_ok, slow_ok) << x << ", " << y;
+                if (fast_ok)
+                {
+                    ASSERT_EQ(fast, slow) << x << ", " << y;
+                }
+            }
+        }
+    }
+
+    // Nearest neighbor reaches half a pixel past the edges
+    image.set_interpolating(false);
+    EXPECT_TRUE(image.get_interpolated_pixel_double(value, -0.4, -0.4, 0));
+    EXPECT_DOUBLE_EQ(value, 1.0);
+    EXPECT_TRUE(image.get_interpolated_pixel_double(value, 2.4, 2.4, 0));
+    EXPECT_DOUBLE_EQ(value, 9.0);
+    EXPECT_FALSE(image.get_interpolated_pixel_double(value, -0.6, 0.0, 0));
+    EXPECT_FALSE(image.get_interpolated_pixel_double(value, 2.6, 0.0, 0));
+}
+
+// Sixteen-bit PGM pixels are stored most significant byte first
+TEST(pgm_data, sixteen_bit_pixels_are_big_endian)
+{
+    const std::string tmp_dir =
+        image_data::image_data_test_mkdtemp("/tmp/tmp.XXXXXX");
+    ASSERT_TRUE(tmp_dir.length() != 0);
+    const std::string path = tmp_dir + "/wide.pgm";
+
+    {
+        std::ofstream file(path, std::ofstream::binary | std::ofstream::trunc);
+        file << "P5\n# a comment\n2 1\n65535\n";
+        const uint8_t pixels[] = {0x01, 0x02, 0xFF, 0xFE};
+        file.write(reinterpret_cast<const char *>(pixels), sizeof(pixels));
+    }
+
+    const auto image = rsvp::PGMData::read_pgm(path);
+    ASSERT_TRUE(image != nullptr);
+    EXPECT_EQ(image->get_width(), 2);
+    EXPECT_EQ(image->get_height(), 1);
+
+    int value = 0;
+    EXPECT_TRUE(image->get_pixel_int(value, 0, 0, 0));
+    EXPECT_EQ(value, 0x0102);
+    EXPECT_TRUE(image->get_pixel_int(value, 1, 0, 0));
+    EXPECT_EQ(value, 0xFFFE);
+
+    double real_value = 0.0;
+    EXPECT_TRUE(image->get_pixel_double(real_value, 1, 0, 0));
+    EXPECT_EQ(real_value, 65534.0);
+    EXPECT_FALSE(image->get_pixel_double(real_value, 2, 0, 0));
+
+    ASSERT_TRUE(image_data::image_data_test_rm_directory(tmp_dir) == 0);
+}
+
+// Fields are whatever lies between commas: empty or unparseable ones read as
+// zero, and a trailing comma adds nothing
+TEST(csv_data, fields_parse_as_numbers)
+{
+    const std::string tmp_dir =
+        image_data::image_data_test_mkdtemp("/tmp/tmp.XXXXXX");
+    ASSERT_TRUE(tmp_dir.length() != 0);
+    const std::string path = tmp_dir + "/fields.csv";
+
+    {
+        std::ofstream file(path, std::ofstream::trunc);
+        file << "1,2.5,-3e2,\n"
+             << ",  4,x\n";
+    }
+
+    const auto image = rsvp::CSVData::read_csv(path);
+    ASSERT_TRUE(image != nullptr);
+    EXPECT_EQ(image->get_width(), 3);
+    EXPECT_EQ(image->get_height(), 2);
+
+    const double expected[2][3] = {{1.0, 2.5, -300.0}, {0.0, 4.0, 0.0}};
+    for (int y = 0; y < 2; y++)
+    {
+        for (int x = 0; x < 3; x++)
+        {
+            double value = -1.0;
+            EXPECT_TRUE(image->get_pixel_double(value, x, y, 0));
+            EXPECT_EQ(value, expected[y][x]) << x << ", " << y;
+        }
+    }
+
+    ASSERT_TRUE(image_data::image_data_test_rm_directory(tmp_dir) == 0);
+}

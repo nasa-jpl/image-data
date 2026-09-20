@@ -1412,3 +1412,95 @@ TEST(composite_data, skipping_leaves_room_for_nearest_neighbor_rounding)
             value, last + 0.6, last + 0.6, 0));
     }
 }
+
+// The seam and clamped fallbacks skip children by their bounds like the main
+// loops do, and so must also decline to skip a child whose bounds are not
+// where its pixels are - whether that child is bare or wrapped in an offset
+TEST(composite_data, seam_fallbacks_never_skip_a_child_its_bounds_do_not_locate)
+{
+    for (const bool wrap_in_offset : {false, true})
+    {
+        for (const CompositeFactory make : composite_factories)
+        {
+            const auto composite = make();
+
+            // Pixels 0..3 in the composite's coordinates, labelled as though
+            // it sat at 100
+            const auto labelled_tile = std::make_shared<WorldLabelledTile>();
+            std::shared_ptr<rsvp::ImageData> labelled = labelled_tile;
+            if (wrap_in_offset)
+            {
+                labelled = std::make_shared<rsvp::ZOffsetData>(labelled_tile);
+            }
+            labelled->set_alpha_band(2);
+
+            // Pixels 4..7, abutting it with a one-pixel seam between
+            const auto placed_tile = std::make_shared<CountingTile>();
+            const auto placed = std::make_shared<rsvp::TranslatedData>(
+                placed_tile, CountingTile::SIZE, 0.0, 1.0, 0.0);
+            placed->set_alpha_band(2);
+
+            composite->add_image(labelled);
+            composite->add_image(placed);
+
+            // Neither tile covers the seam on its own
+            const double seam_x = CountingTile::SIZE - 0.6;
+            const double seam_y = 1.5;
+
+            double labelled_value = 0.0;
+            double placed_value = 0.0;
+            EXPECT_FALSE(labelled->get_interpolated_pixel_double(
+                labelled_value, seam_x, seam_y, 0));
+            EXPECT_FALSE(placed->get_interpolated_pixel_double(
+                placed_value, seam_x, seam_y, 0));
+
+            // The labelled tile's last column has a weight of 0.6 here and
+            // the placed tile's first column 0.4, so together they enclose
+            // the point and the composite reconstructs it
+            const double labelled_edge =
+                CountingTile::value_at(CountingTile::SIZE - 1, seam_y);
+            const double placed_edge = CountingTile::value_at(0, seam_y);
+
+            double value = 0.0;
+            ASSERT_TRUE(composite->get_interpolated_pixel_double(
+                value, seam_x, seam_y, 0));
+
+            if (dynamic_cast<rsvp::ScoredCompositeData *>(composite.get()))
+            {
+                // A scored composite takes the nearest tile's value
+                EXPECT_DOUBLE_EQ(value, labelled_edge);
+            }
+            else
+            {
+                EXPECT_DOUBLE_EQ(value,
+                                 0.6 * labelled_edge + 0.4 * placed_edge);
+            }
+
+            // Off the labelled tile's far edge, only it can supply a clamped
+            // sample, and it must not be ruled out by its labels
+            double weight = 0.0;
+            ASSERT_TRUE(composite->get_clamped_pixel_double(
+                value, weight, -0.5, seam_y, 0));
+            EXPECT_DOUBLE_EQ(weight, 0.5);
+            EXPECT_DOUBLE_EQ(value, CountingTile::value_at(0, seam_y));
+        }
+    }
+}
+
+// A child whose declared alpha band it cannot supply has no data, which is
+// no reason to abandon the whole lookup
+TEST(composite_data, a_missing_alpha_band_is_no_data_rather_than_an_error)
+{
+    for (const CompositeFactory make : composite_factories)
+    {
+        const auto composite = make();
+
+        const auto image = std::make_shared<CompositeTestImage>(3);
+        image->set_alpha_band(7);
+        composite->add_image(image);
+
+        double value = 0.0;
+        EXPECT_NO_THROW(EXPECT_FALSE(
+            composite->get_interpolated_pixel_double(value, 1.0, 1.0, 0)));
+    }
+}
