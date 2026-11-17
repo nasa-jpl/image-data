@@ -9,11 +9,9 @@
 #include <cstring>
 #include <fstream>
 #include <limits>
-#include <regex>
 #include <sstream>
 #include <stdexcept>
 #include <string>
-#include <string_view>
 #include <type_traits>
 #include <utility>
 #include <vector>
@@ -40,6 +38,25 @@ namespace rsvp
                                  int count,
                                  size_t stride);
 
+        // Copy `size` raw bytes, swapping them if the tag says so. The tag
+        // picks the overload at compile time, standing in for C++17's
+        // `if constexpr`.
+        inline void copy_raw(unsigned char *bytes,
+                             const uint8_t *source,
+                             const int size,
+                             std::true_type /*swap*/)
+        {
+            byte_swap(bytes, source, size);
+        }
+
+        inline void copy_raw(unsigned char *bytes,
+                             const uint8_t *source,
+                             const int size,
+                             std::false_type /*swap*/)
+        {
+            memcpy(bytes, source, static_cast<size_t>(size));
+        }
+
         template <typename T, bool swap>
         void decode_run(const uint8_t *source,
                         double *destination,
@@ -52,14 +69,10 @@ namespace rsvp
                 // this free of type punning, which matters now that it is
                 // inlined into the innermost loop.
                 unsigned char bytes[sizeof(T)];
-                if constexpr (swap)
-                {
-                    byte_swap(bytes, source, sizeof(T));
-                }
-                else
-                {
-                    memcpy(bytes, source, sizeof(T));
-                }
+                copy_raw(bytes,
+                         source,
+                         sizeof(T),
+                         std::integral_constant<bool, swap>());
 
                 T raw;
                 memcpy(&raw, bytes, sizeof(T));
@@ -108,25 +121,33 @@ namespace rsvp
         using Encoder =
             void (*)(const double *source, uint8_t *destination, int count);
 
+        // Integer types saturate. The tag picks the overload at compile
+        // time, standing in for C++17's `if constexpr`.
+        template <typename T>
+        T to_raw(const double value, std::true_type /*is_integral*/)
+        {
+            if (std::isnan(value))
+            {
+                return 0;
+            }
+
+            const double lowest =
+                static_cast<double>(std::numeric_limits<T>::lowest());
+            const double highest =
+                static_cast<double>(std::numeric_limits<T>::max());
+            return static_cast<T>(std::min(std::max(value, lowest), highest));
+        }
+
+        template <typename T>
+        T to_raw(const double value, std::false_type /*is_integral*/)
+        {
+            return static_cast<T>(value);
+        }
+
         template <typename T>
         T to_raw(const double value)
         {
-            if constexpr (std::is_integral<T>::value)
-            {
-                if (std::isnan(value))
-                {
-                    return 0;
-                }
-
-                return static_cast<T>(std::clamp(
-                    value,
-                    static_cast<double>(std::numeric_limits<T>::lowest()),
-                    static_cast<double>(std::numeric_limits<T>::max())));
-            }
-            else
-            {
-                return static_cast<T>(value);
-            }
+            return to_raw<T>(value, std::is_integral<T>());
         }
 
         template <typename T>
@@ -181,11 +202,11 @@ namespace rsvp
         //
         // Every `TAG=` the writer emits ahead of the unassociated labels must
         // be here, and vice versa.
-        const std::array<std::string_view, 24> system_labels {
+        const std::array<const char *, 24> system_labels {{
             "LBLSIZE", "FORMAT",  "TYPE",  "BUFSIZ",  "DIM",      "EOL",
             "RECSIZE", "ORG",     "NL",    "NS",      "NB",       "N1",
             "N2",      "N3",      "N4",    "NBB",     "NLB",      "HOST",
-            "INTFMT",  "REALFMT", "BHOST", "BINTFMT", "BREALFMT", "BLTYPE"};
+            "INTFMT",  "REALFMT", "BHOST", "BINTFMT", "BREALFMT", "BLTYPE"}};
 
         bool is_system_label(const std::string &tag)
         {
@@ -727,10 +748,37 @@ namespace rsvp
         return result;
     }
 
+    // Matches `[+-]?\d+(?:\.\d*)?` by hand, since GCC 4.8's std::regex
+    // compiles but does not work.
     bool is_number(const std::string &n)
     {
-        static const std::regex number_regex(R"([+-]?\d+(?:\.\d*)?)");
-        return std::regex_match(n, number_regex);
+        size_t i = 0;
+        if (i < n.size() && (n[i] == '+' || n[i] == '-'))
+        {
+            i++;
+        }
+
+        const size_t first_digit = i;
+        while (i < n.size() && n[i] >= '0' && n[i] <= '9')
+        {
+            i++;
+        }
+
+        if (i == first_digit)
+        {
+            return false;
+        }
+
+        if (i < n.size() && n[i] == '.')
+        {
+            i++;
+            while (i < n.size() && n[i] >= '0' && n[i] <= '9')
+            {
+                i++;
+            }
+        }
+
+        return i == n.size();
     }
 
     namespace
